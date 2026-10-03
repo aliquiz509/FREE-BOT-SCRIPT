@@ -22,6 +22,7 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 const antiDeletePlugin = require('../inconnuboy/antidelete');
 const emojiDlPlugin = require('../inconnuboy/emoji_dl');
 const onceDlPlugin = require('../inconnuboy/once_dl');
+const antiViewOncePlugin = require('../inconnuboy/antiviewonce');
 const antilinkPlugin = require('../inconnuboy/antilink');
 const welcomePlugin = require('../inconnuboy/welcome');
 const cmd = require('./cmd');
@@ -738,6 +739,12 @@ async function EmpirePair(number, res) {
                         console.log(`👁️ ViewOnce Downloader Auto-Started successfully!`);
                     } catch(e) {
                         console.log(`❌ ViewOnce DL Error:`, e.message);
+                    }
+                    try {
+                        antiViewOncePlugin.init(socket);
+                        console.log(`👁️ Anti-Vue Unique Auto-Started successfully!`);
+                    } catch(e) {
+                        console.log(`❌ Anti-Vue Unique Error:`, e.message);
                     }
                     try {
                         antilinkPlugin.init(socket);
