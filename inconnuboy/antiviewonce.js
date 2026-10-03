@@ -1,248 +1,485 @@
-const {
-    downloadContentFromMessage,
-    getContentType,
-    jidNormalizedUser
-} = require('baileys');
-const mongoose = require('mongoose');
+const { jidNormalizedUser } = require("baileys");
 
-if (!global.antiViewOnceStates) global.antiViewOnceStates = new Map();
-if (!global.antiViewOnceListeners) global.antiViewOnceListeners = new Map();
-
-function unwrapMessage(message) {
-    let current = message;
-    let wasViewOnce = false;
-
-    for (let i = 0; i < 5 && current; i++) {
-        if (current.ephemeralMessage?.message) {
-            current = current.ephemeralMessage.message;
-            continue;
-        }
-        if (current.viewOnceMessage?.message) {
-            current = current.viewOnceMessage.message;
-            wasViewOnce = true;
-            continue;
-        }
-        if (current.viewOnceMessageV2?.message) {
-            current = current.viewOnceMessageV2.message;
-            wasViewOnce = true;
-            continue;
-        }
-        if (current.viewOnceMessageV2Extension?.message) {
-            current = current.viewOnceMessageV2Extension.message;
-            wasViewOnce = true;
-            continue;
-        }
-        break;
-    }
-
-    if (!current) return null;
-
-    const type = getContentType(current);
-    const media = current[type];
-
-    if (!wasViewOnce && !media?.viewOnce) return null;
-    if (!['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage'].includes(type)) return null;
-
-    return { actualMessage: current, type, media };
+if (!global.antiViewOnceActive) {
+    global.antiViewOnceActive = new Map();
 }
 
-async function downloadMedia(media, type) {
-    const stream = await downloadContentFromMessage(media, type.replace('Message', ''));
-    const chunks = [];
-    for await (const chunk of stream) chunks.push(chunk);
-    return Buffer.concat(chunks);
-}
-
-async function loadAntiViewOnceState(socketId) {
+function getSessionId(socket) {
     try {
-        const Session = mongoose.models.SessionNew;
-        if (!Session) return false;
+        if (!socket?.user?.id) return null;
 
-        const doc = await Session.findOne({ number: socketId }, 'config').lean();
-        return doc?.config?.ANTI_VIEW_ONCE === 'true';
-    } catch (error) {
-        console.log(`⚠️ Impossible de charger l'état Anti-Vue Unique pour ${socketId} : ${error.message}`);
-        return false;
+        const sessionJid = jidNormalizedUser(socket.user.id);
+        return sessionJid.split("@")[0];
+    } catch {
+        return null;
     }
+}
+
+function getViewOnceMessage(message) {
+    if (!message) return null;
+
+    return (
+        message?.viewOnceMessage?.message ||
+        message?.viewOnceMessageV2?.message ||
+        message?.viewOnceMessageV2Extension?.message ||
+        null
+    );
+}
+
+function getMediaType(message) {
+    if (!message) return null;
+
+    if (message.imageMessage) return "image";
+    if (message.videoMessage) return "video";
+    if (message.audioMessage) return "audio";
+    if (message.documentMessage) return "document";
+
+    return null;
+}
+
+function getChatType(jid) {
+    if (!jid) return "Inconnu";
+
+    if (jid.endsWith("@g.us")) {
+        return "Groupe";
+    }
+
+    if (jid === "status@broadcast") {
+        return "Statut";
+    }
+
+    return "Conversation privée";
+}
+
+function createNotification({
+    mediaType,
+    remoteJid,
+    sender,
+    status,
+    error
+}) {
+    const typeLabels = {
+        image: "Image",
+        video: "Vidéo",
+        audio: "Audio",
+        document: "Document"
+    };
+
+    const type = typeLabels[mediaType] || "Inconnu";
+    const chatType = getChatType(remoteJid);
+    const senderNumber = sender
+        ? sender.split("@")[0]
+        : "Inconnu";
+
+    if (status === "detected") {
+        return (
+`╭━━〔 👁️ ANTI-VUE UNIQUE 〕━━╮
+┃
+┃ ✅ Message Vue Unique détecté.
+┃
+┃ 📷 Type : ${type}
+┃ 💬 Discussion : ${chatType}
+┃ 👤 Expéditeur : @${senderNumber}
+┃ 🔒 Protection conservée
+┃
+┃ ℹ️ Le média n'a pas été
+┃    extrait ou redistribué.
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯`
+        );
+    }
+
+    return (
+`╭━━〔 👁️ ANTI-VUE UNIQUE 〕━━╮
+┃
+┃ ❌ Erreur de traitement.
+┃
+┃ 📷 Type : ${type}
+┃ 💬 Discussion : ${chatType}
+┃ 👤 Expéditeur : @${senderNumber}
+┃
+┃ ⚠️ Erreur :
+┃ ${String(error || "Erreur inconnue")}
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯`
+    );
 }
 
 function initAntiViewOnce(socket) {
     try {
         if (!socket?.user?.id) return;
 
-        const sessionJid = jidNormalizedUser(socket.user.id);
-        const socketId = sessionJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+        const sessionId = getSessionId(socket);
 
-        if (global.antiViewOnceListeners.has(socketId)) return;
+        if (!sessionId) return;
 
-        global.antiViewOnceStates.set(socketId, false);
+        if (global.antiViewOnceActive.has(sessionId)) {
+            console.log(
+                `👁️ Anti-Vue Unique déjà actif pour ${sessionId}`
+            );
+            return;
+        }
 
-        loadAntiViewOnceState(socketId).then(enabled => {
-            if (global.antiViewOnceStates.get(socketId) !== true) {
-                global.antiViewOnceStates.set(socketId, enabled === true);
-            }
-        }).catch(() => {});
-
-        const antiViewOnceListener = async ({ messages }) => {
+        const listener = async (chatUpdate) => {
             try {
-                if (global.antiViewOnceStates.get(socketId) !== true) return;
+                if (!global.antiViewOnceActive.get(sessionId)) {
+                    return;
+                }
 
-                const msg = messages?.[0];
-                if (!msg?.message || msg.key?.fromMe) return;
-                if (msg.key?.remoteJid === 'status@broadcast') return;
+                const message = chatUpdate?.messages?.[0];
 
-                const extracted = unwrapMessage(msg.message);
-                if (!extracted) return;
+                if (!message?.message) {
+                    return;
+                }
 
-                const { type, media } = extracted;
-                console.log(`👁️ Anti-Vue Unique : ${type} détecté pour ${socketId}`);
+                const key = message.key || {};
+                const remoteJid = key.remoteJid;
 
-                let buffer;
+                if (!remoteJid || remoteJid === "status@broadcast") {
+                    return;
+                }
+
+                const viewOnce = getViewOnceMessage(message.message);
+
+                if (!viewOnce) {
+                    return;
+                }
+
+                const mediaType = getMediaType(viewOnce);
+
+                if (!mediaType) {
+                    try {
+                        await socket.sendMessage(
+                            sessionId + "@s.whatsapp.net",
+                            {
+                                text: createNotification({
+                                    mediaType: null,
+                                    remoteJid,
+                                    sender:
+                                        key.participant ||
+                                        remoteJid,
+                                    status: "error",
+                                    error:
+                                        "Type de message Vue Unique non pris en charge."
+                                })
+                            }
+                        );
+                    } catch (sendError) {
+                        console.log(
+                            "Erreur d'envoi Anti-Vue Unique :",
+                            sendError.message
+                        );
+                    }
+
+                    return;
+                }
+
+                console.log(
+                    `👁️ Vue Unique détectée : ${mediaType} depuis ${remoteJid}`
+                );
+
+                const sender =
+                    key.participant ||
+                    remoteJid;
+
                 try {
-                    buffer = await downloadMedia(media, type);
-                } catch (error) {
-                    console.log(`❌ Anti-Vue Unique : échec du téléchargement : ${error.message}`);
-                    return;
+                    await socket.sendMessage(
+                        sessionId + "@s.whatsapp.net",
+                        {
+                            text: createNotification({
+                                mediaType,
+                                remoteJid,
+                                sender,
+                                status: "detected"
+                            }),
+                            mentions: sender.includes("@")
+                                ? [sender]
+                                : []
+                        }
+                    );
+
+                    console.log(
+                        `✅ Anti-Vue Unique : ${mediaType} détecté et notification envoyée.`
+                    );
+                } catch (sendError) {
+                    console.log(
+                        "Erreur notification Anti-Vue Unique :",
+                        sendError.message
+                    );
                 }
 
-                if (!buffer?.length) {
-                    console.log(`❌ Anti-Vue Unique : média vide ou inaccessible.`);
-                    return;
-                }
-
-                const sender = msg.key.participant || msg.key.remoteJid;
-                const senderTag = sender?.split('@')[0] || 'inconnu';
-                const caption = media.caption || '';
-                const prefix = `👁️ *Message Vue Unique converti en message normal*\n\n`;
-                const senderLine = `👤 *Expéditeur :* @${senderTag}\n\n`;
-                const footer = `> BY INCONNU BOY`;
-
-                let content;
-
-                if (type === 'imageMessage') {
-                    content = {
-                        image: buffer,
-                        caption: prefix + (caption ? `📝 *Légende :* ${caption}\n\n` : '') + senderLine + footer,
-                        mentions: [sender]
-                    };
-                } else if (type === 'videoMessage') {
-                    content = {
-                        video: buffer,
-                        caption: prefix + (caption ? `📝 *Légende :* ${caption}\n\n` : '') + senderLine + footer,
-                        mentions: [sender]
-                    };
-                } else if (type === 'audioMessage') {
-                    content = {
-                        audio: buffer,
-                        mimetype: media.mimetype || 'audio/ogg; codecs=opus',
-                        ptt: !!media.ptt
-                    };
-                } else if (type === 'documentMessage') {
-                    content = {
-                        document: buffer,
-                        mimetype: media.mimetype || 'application/octet-stream',
-                        fileName: media.fileName || `vue-unique-${Date.now()}.${media.fileName?.split('.').pop() || 'bin'}`,
-                        caption: prefix + (caption ? `📝 *Légende :* ${caption}\n\n` : '') + senderLine + footer,
-                        mentions: [sender]
-                    };
-                }
-
-                if (!content) return;
-
-                await socket.sendMessage(sessionJid, content);
-
-                if (type === 'audioMessage') {
-                    await socket.sendMessage(sessionJid, {
-                        text: `${prefix}${senderLine}${footer}`,
-                        mentions: [sender]
-                    });
-                }
-
-                console.log(`✅ Anti-Vue Unique : ${type} envoyé dans la boîte du bot.`);
             } catch (error) {
-                console.log(`❌ Erreur Anti-Vue Unique : ${error.message}`);
+                try {
+                    await socket.sendMessage(
+                        sessionId + "@s.whatsapp.net",
+                        {
+                            text: createNotification({
+                                mediaType: null,
+                                remoteJid:
+                                    chatUpdate?.messages?.[0]?.key
+                                        ?.remoteJid,
+                                sender:
+                                    chatUpdate?.messages?.[0]?.key
+                                        ?.participant ||
+                                    chatUpdate?.messages?.[0]?.key
+                                        ?.remoteJid,
+                                status: "error",
+                                error: error.message
+                            })
+                        }
+                    );
+                } catch (sendError) {
+                    console.log(
+                        "Erreur d'envoi du rapport Anti-Vue Unique :",
+                        sendError.message
+                    );
+                }
+
+                console.log(
+                    "Erreur Anti-Vue Unique :",
+                    error.message
+                );
             }
         };
 
-        socket.ev.on('messages.upsert', antiViewOnceListener);
-        global.antiViewOnceListeners.set(socketId, { socket, listener: antiViewOnceListener });
+        socket.ev.on(
+            "messages.upsert",
+            listener
+        );
 
-        console.log(`👁️ Anti-Vue Unique initialisé pour ${socketId}`);
+        global.antiViewOnceActive.set(
+            sessionId,
+            true
+        );
+
+        console.log(
+            `👁️ Anti-Vue Unique activé pour ${sessionId}`
+        );
+
     } catch (error) {
-        console.log(`❌ Erreur d'initialisation Anti-Vue Unique : ${error.message}`);
+        console.log(
+            "Erreur d'initialisation Anti-Vue Unique :",
+            error.message
+        );
+    }
+}
+
+function stopAntiViewOnce(socket) {
+    try {
+        const sessionId = getSessionId(socket);
+
+        if (!sessionId) return false;
+
+        global.antiViewOnceActive.set(
+            sessionId,
+            false
+        );
+
+        console.log(
+            `👁️ Anti-Vue Unique désactivé pour ${sessionId}`
+        );
+
+        return true;
+
+    } catch (error) {
+        console.log(
+            "Erreur de désactivation Anti-Vue Unique :",
+            error.message
+        );
+
+        return false;
     }
 }
 
 module.exports = {
-    name: 'antiviewonce',
-    category: 5,
-    description: 'Convertit automatiquement les messages Vue Unique en messages normaux',
-    commands: ['antiviewonce', 'aviewonce', 'avo'],
+    name: "antiviewonce",
+
+    category: 7,
+
+    description:
+        "Système de détection des messages Vue Unique.",
+
+    commands: [
+        "antiviewonce",
+        "av"
+    ],
+
     init: initAntiViewOnce,
 
-    handler: async ({ socket, msg, sender, args, reply, isOwner, sessionConfig, activeSockets, botNumber }) => {
+    handler: async ({
+        socket,
+        msg,
+        sender,
+        args
+    }) => {
         try {
-            const sessionJid = jidNormalizedUser(socket.user.id);
-            const sessionNumber = sessionJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-            const sanitizedNumber = (botNumber || sessionNumber).replace(/[^0-9]/g, '');
-            const normalizedSender = (sender || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-            const ownerAccess = isOwner === true || normalizedSender === sessionNumber;
+            const sessionId = getSessionId(socket);
 
-            if (!ownerAccess) {
-                return reply('❌ *Cette commande est réservée au propriétaire du bot.*');
+            if (!sessionId) {
+                return;
             }
 
-            const option = (args?.[0] || '').toLowerCase();
-            const getState = () => global.antiViewOnceStates.get(sessionNumber) === true || global.antiViewOnceStates.get(sanitizedNumber) === true;
+            const action =
+                String(args?.[0] || "status")
+                    .toLowerCase()
+                    .trim();
 
-            if (!['on', 'off', 'status'].includes(option)) {
-                return reply(
-                    `*👁️ Anti-Vue Unique*\n\n` +
-                    `📌 *État actuel :* ${getState() ? 'ON 🟢' : 'OFF 🔴'}\n\n` +
-                    `Utilisation :\n` +
-                    `• *.antiviewonce on* — Activer\n` +
-                    `• *.antiviewonce off* — Désactiver\n` +
-                    `• *.antiviewonce status* — Voir l'état`
+            if (action === "on") {
+
+                global.antiViewOnceActive.set(
+                    sessionId,
+                    true
                 );
-            }
 
-            if (option === 'status') {
-                return reply(
-                    `*👁️ Statut Anti-Vue Unique*\n\n` +
-                    `🛡️ *Système :* ${getState() ? 'Actif 🟢' : 'Inactif 🔴'}\n` +
-                    `📥 *Conversion automatique :* ${getState() ? 'Activée' : 'Désactivée'}`
+                await socket.sendMessage(
+                    sender,
+                    {
+                        text:
+`╭━━〔 👁️ ANTI-VUE UNIQUE 〕━━╮
+┃
+┃ 🟢 Système activé
+┃
+┃ 👁️ Détection : ACTIVÉE
+┃ 📷 Images : DÉTECTÉES
+┃ 🔒 Protection : CONSERVÉE
+┃
+┃ Les messages Vue Unique
+┃ seront signalés dans votre
+┃ boîte de réception.
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯`
+                    },
+                    {
+                        quoted: msg
+                    }
                 );
-            }
 
-            const enabled = option === 'on';
-            global.antiViewOnceStates.set(sessionNumber, enabled);
-            global.antiViewOnceStates.set(sanitizedNumber, enabled);
-
-            if (sessionConfig) sessionConfig.ANTI_VIEW_ONCE = enabled ? 'true' : 'false';
-
-            const currentData = activeSockets?.get?.(sanitizedNumber);
-            if (currentData) {
-                currentData.config = sessionConfig;
-                activeSockets.set(sanitizedNumber, currentData);
-            }
-
-            const Session = mongoose.models.SessionNew;
-            if (Session) {
-                await Session.findOneAndUpdate(
-                    { number: sanitizedNumber },
-                    { $set: { config: sessionConfig, updatedAt: new Date() } },
-                    { upsert: true }
+                console.log(
+                    `🟢 Anti-Vue Unique activé pour ${sessionId}`
                 );
+
+                return;
             }
 
-            return reply(
-                enabled
-                    ? `*👁️ Anti-Vue Unique ACTIVÉ 🟢*\n\nTous les messages Vue Unique reçus seront automatiquement convertis en messages normaux et envoyés dans votre boîte avec le bot.`
-                    : `*👁️ Anti-Vue Unique DÉSACTIVÉ 🔴*\n\nLes messages Vue Unique ne seront plus convertis automatiquement.`
+            if (action === "off") {
+
+                global.antiViewOnceActive.set(
+                    sessionId,
+                    false
+                );
+
+                await socket.sendMessage(
+                    sender,
+                    {
+                        text:
+`╭━━〔 👁️ ANTI-VUE UNIQUE 〕━━╮
+┃
+┃ 🔴 Système désactivé
+┃
+┃ 👁️ Détection : DÉSACTIVÉE
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯`
+                    },
+                    {
+                        quoted: msg
+                    }
+                );
+
+                console.log(
+                    `🔴 Anti-Vue Unique désactivé pour ${sessionId}`
+                );
+
+                return;
+            }
+
+            if (action === "status") {
+
+                const active =
+                    global.antiViewOnceActive.get(
+                        sessionId
+                    ) === true;
+
+                await socket.sendMessage(
+                    sender,
+                    {
+                        text:
+`╭━━〔 👁️ ANTI-VUE UNIQUE 〕━━╮
+┃
+┃ État : ${
+    active
+        ? "🟢 ACTIVÉ"
+        : "🔴 DÉSACTIVÉ"
+}
+┃
+┃ 📷 Détection des images :
+┃ ${
+    active
+        ? "🟢 ACTIVE"
+        : "🔴 INACTIVE"
+}
+┃
+┃ 🔒 Protection View Once :
+┃ CONSERVÉE
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯`
+                    },
+                    {
+                        quoted: msg
+                    }
+                );
+
+                return;
+            }
+
+            await socket.sendMessage(
+                sender,
+                {
+                    text:
+`╭━━〔 👁️ ANTI-VUE UNIQUE 〕━━╮
+┃
+┃ Commandes disponibles :
+┃
+┃ • .antiviewonce on
+┃ • .antiviewonce off
+┃ • .antiviewonce status
+┃
+┃ Alias :
+┃ • .av on
+┃ • .av off
+┃ • .av status
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯`
+                },
+                {
+                    quoted: msg
+                }
             );
+
         } catch (error) {
-            console.log(`❌ Erreur de configuration Anti-Vue Unique : ${error.message}`);
-            return reply(`❌ *Impossible de modifier Anti-Vue Unique.*\n${error.message}`);
+            console.log(
+                "Erreur du module Anti-Vue Unique :",
+                error.message
+            );
+
+            try {
+                await socket.sendMessage(
+                    sender,
+                    {
+                        text:
+`╭━━〔 ❌ ERREUR 〕━━╮
+┃
+┃ Impossible d'exécuter
+┃ Anti-Vue Unique.
+┃
+┃ ⚠️ ${error.message}
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯`
+                    },
+                    {
+                        quoted: msg
+                    }
+                );
+            } catch {}
         }
     }
 };
