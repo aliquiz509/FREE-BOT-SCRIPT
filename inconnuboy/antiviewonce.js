@@ -1,9 +1,14 @@
 const {
     getContentType,
-    jidNormalizedUser
+    jidNormalizedUser,
+    downloadContentFromMessage
 } = require('baileys');
 
 const mongoose = require('mongoose');
+
+/* =========================================================
+ * ETATS GLOBAUX
+ * ========================================================= */
 
 if (!global.antiViewOnceStates) {
     global.antiViewOnceStates = new Map();
@@ -14,8 +19,7 @@ if (!global.antiViewOnceListeners) {
 }
 
 /* =========================================================
- * ANTI VIEW ONCE — DETECTION UNIQUEMENT
- * Ne télécharge pas et ne redistribue pas le média protégé.
+ * INSPECTION DU MESSAGE VIEW ONCE
  * ========================================================= */
 
 function inspectViewOnceMessage(msg) {
@@ -28,26 +32,15 @@ function inspectViewOnceMessage(msg) {
     let wrapper = null;
     let isViewOnce = false;
 
-    /*
-     * Certains formats Baileys peuvent signaler View Once
-     * directement dans la clé, même lorsque message est absent.
-     */
     if (key.isViewOnce === true) {
         isViewOnce = true;
         wrapper = 'key.isViewOnce';
     }
 
-    /*
-     * Parcours des wrappers connus.
-     */
     for (let i = 0; i < 8 && current; i++) {
         if (current.ephemeralMessage?.message) {
             current = current.ephemeralMessage.message;
-
-            if (!wrapper) {
-                wrapper = 'ephemeralMessage';
-            }
-
+            if (!wrapper) wrapper = 'ephemeralMessage';
             continue;
         }
 
@@ -75,41 +68,32 @@ function inspectViewOnceMessage(msg) {
         break;
     }
 
-    /*
-     * Si le média possède lui-même viewOnce:true.
-     */
     if (current) {
         const type = getContentType(current);
         const media = type ? current[type] : null;
 
         if (media?.viewOnce === true) {
             isViewOnce = true;
-
-            if (!wrapper) {
-                wrapper = `${type}.viewOnce`;
-            }
+            if (!wrapper) wrapper = `${type}.viewOnce`;
         }
 
-        if (isViewOnce && type) {
+        if (isViewOnce && type && media) {
             return {
                 detected: true,
                 type,
                 media,
+                message: current,
                 wrapper
             };
         }
     }
 
-    /*
-     * Cas important :
-     * key.isViewOnce === true mais aucun contenu média n'est
-     * présent dans le message reçu.
-     */
     if (isViewOnce) {
         return {
             detected: true,
             type: null,
             media: null,
+            message: current,
             wrapper: wrapper || 'key.isViewOnce'
         };
     }
@@ -118,45 +102,72 @@ function inspectViewOnceMessage(msg) {
 }
 
 /* =========================================================
- * TYPE HUMAIN DU MEDIA
+ * LABEL DU TYPE DE MEDIA
  * ========================================================= */
 
 function getMediaLabel(type) {
     switch (type) {
-        case 'imageMessage':
-            return 'Image';
-
-        case 'videoMessage':
-            return 'Vidéo';
-
-        case 'audioMessage':
-            return 'Audio';
-
-        case 'documentMessage':
-            return 'Document';
-
-        default:
-            return type || 'Inconnu';
+        case 'imageMessage': return 'Image';
+        case 'videoMessage': return 'Vidéo';
+        case 'audioMessage': return 'Audio';
+        case 'documentMessage': return 'Document';
+        default: return type || 'Inconnu';
     }
 }
 
 /* =========================================================
- * INITIALISATION ETAT
+ * TELECHARGEMENT DU MEDIA
+ * ========================================================= */
+
+async function downloadViewOnceMedia(media, type) {
+    /*
+     * Détermine le "streamType" attendu par Baileys
+     * selon le type de média.
+     */
+    let streamType;
+
+    switch (type) {
+        case 'imageMessage':
+            streamType = 'image';
+            break;
+        case 'videoMessage':
+            streamType = 'video';
+            break;
+        case 'audioMessage':
+            streamType = 'audio';
+            break;
+        case 'documentMessage':
+            streamType = 'document';
+            break;
+        default:
+            throw new Error(`Type de média non supporté : ${type}`);
+    }
+
+    const stream = await downloadContentFromMessage(
+        media,
+        streamType
+    );
+
+    let buffer = Buffer.from([]);
+
+    for await (const chunk of stream) {
+        buffer = Buffer.concat([buffer, chunk]);
+    }
+
+    return buffer;
+}
+
+/* =========================================================
+ * CHARGEMENT ETAT DEPUIS MONGODB
  * ========================================================= */
 
 async function loadAntiViewOnceState(socketId) {
     try {
         const Session = mongoose.models.SessionNew;
-
-        if (!Session) {
-            return false;
-        }
+        if (!Session) return false;
 
         const doc = await Session
-            .findOne(
-                { number: socketId },
-                'config'
-            )
+            .findOne({ number: socketId }, 'config')
             .lean();
 
         return doc?.config?.ANTI_VIEW_ONCE === 'true';
@@ -165,16 +176,15 @@ async function loadAntiViewOnceState(socketId) {
         console.log(
             `[ANTI-VIEW-ONCE] Erreur chargement état : ${error.message}`
         );
-
         return false;
     }
 }
 
 /* =========================================================
- * NOTIFICATION INBOX
+ * ENVOI DU MEDIA DANS L'INBOX
  * ========================================================= */
 
-async function sendDetectionNotification(socket, inboxJid, msg, info) {
+async function sendMediaToInbox(socket, inboxJid, msg, info, buffer) {
     const remoteJid = msg?.key?.remoteJid || 'inconnu';
 
     const participant =
@@ -192,39 +202,92 @@ async function sendDetectionNotification(socket, inboxJid, msg, info) {
     const typeLabel = getMediaLabel(info?.type);
 
     let discussion = 'Conversation privée';
-
     if (remoteJid === 'status@broadcast') {
         discussion = 'Statut WhatsApp';
     } else if (remoteJid?.endsWith('@g.us')) {
         discussion = 'Groupe';
     }
 
-    const notification =
-        `╭━━〔 👁️ ANTI-VUE UNIQUE 〕━━╮\n` +
-        `┃\n` +
-        `┃ ✅ Message Vue Unique détecté\n` +
+    /*
+     * Légende / texte joint au média original.
+     */
+    const caption =
+        info?.media?.caption ||
+        '';
+
+    const headerText =
+        `╭━━〔 👁️ VUE UNIQUE CAPTURÉE 〕━━╮\n` +
         `┃\n` +
         `┃ 📷 Type : ${typeLabel}\n` +
         `┃ 💬 Discussion : ${discussion}\n` +
         `┃ 👤 Expéditeur : @${senderNumber}\n` +
         `┃\n` +
-        `┃ 🔒 Protection conservée\n` +
-        `┃\n` +
-        `┃ 🔍 Wrapper : ${info?.wrapper || 'non identifié'}\n` +
-        `┃\n` +
         `╰━━━━━━━━━━━━━━━━━━━━━━╯`;
 
-    await socket.sendMessage(
-        inboxJid,
-        {
-            text: notification,
-            mentions:
-                participant &&
-                participant !== 'inconnu'
-                    ? [participant]
-                    : []
-        }
-    );
+    /*
+     * Prépare le contenu à envoyer selon le type.
+     */
+    const mediaPayload = {};
+
+    if (info.type === 'imageMessage') {
+        mediaPayload.image = buffer;
+        mediaPayload.caption = `${headerText}\n\n${caption}`.trim();
+        mediaPayload.mimetype =
+            info.media?.mimetype || 'image/jpeg';
+    } else if (info.type === 'videoMessage') {
+        mediaPayload.video = buffer;
+        mediaPayload.caption = `${headerText}\n\n${caption}`.trim();
+        mediaPayload.mimetype =
+            info.media?.mimetype || 'video/mp4';
+        mediaPayload.gifPlayback =
+            info.media?.gifPlayback || false;
+    } else if (info.type === 'audioMessage') {
+        /*
+         * Pour l'audio, on envoie d'abord un message texte,
+         * puis l'audio.
+         */
+        await socket.sendMessage(
+            inboxJid,
+            {
+                text: headerText,
+                mentions:
+                    participant && participant !== 'inconnu'
+                        ? [participant]
+                        : []
+            }
+        );
+
+        mediaPayload.audio = buffer;
+        mediaPayload.mimetype =
+            info.media?.mimetype || 'audio/ogg; codecs=opus';
+        mediaPayload.ptt =
+            info.media?.ptt || false;
+    } else if (info.type === 'documentMessage') {
+        mediaPayload.document = buffer;
+        mediaPayload.mimetype =
+            info.media?.mimetype ||
+            'application/octet-stream';
+        mediaPayload.fileName =
+            info.media?.fileName || 'document';
+        mediaPayload.caption = headerText;
+    } else {
+        throw new Error(
+            `Type non supporté pour envoi : ${info.type}`
+        );
+    }
+
+    /*
+     * Ajoute les mentions si nécessaire (image/vidéo/document).
+     */
+    if (
+        info.type !== 'audioMessage' &&
+        participant &&
+        participant !== 'inconnu'
+    ) {
+        mediaPayload.mentions = [participant];
+    }
+
+    await socket.sendMessage(inboxJid, mediaPayload);
 }
 
 /* =========================================================
@@ -232,8 +295,7 @@ async function sendDetectionNotification(socket, inboxJid, msg, info) {
  * ========================================================= */
 
 async function sendErrorNotification(socket, inboxJid, msg, info, error) {
-    const remoteJid =
-        msg?.key?.remoteJid || 'inconnu';
+    const remoteJid = msg?.key?.remoteJid || 'inconnu';
 
     const participant =
         msg?.key?.participant ||
@@ -247,11 +309,9 @@ async function sendErrorNotification(socket, inboxJid, msg, info, error) {
             ?.replace(/[^0-9]/g, '') ||
         'inconnu';
 
-    const typeLabel =
-        getMediaLabel(info?.type);
+    const typeLabel = getMediaLabel(info?.type);
 
     const realError =
-        error?.stack ||
         error?.message ||
         String(error) ||
         'Erreur inconnue';
@@ -268,25 +328,19 @@ async function sendErrorNotification(socket, inboxJid, msg, info, error) {
         `┃ ⚠️ Erreur :\n` +
         `┃ ${realError}\n` +
         `┃\n` +
-        `┃ 🔍 Wrapper : ${info?.wrapper || 'non identifié'}\n` +
-        `┃\n` +
         `╰━━━━━━━━━━━━━━━━━━━━━━╯`;
 
     try {
-        await socket.sendMessage(
-            inboxJid,
-            {
-                text: notification,
-                mentions:
-                    participant &&
-                    participant !== 'inconnu'
-                        ? [participant]
-                        : []
-            }
-        );
+        await socket.sendMessage(inboxJid, {
+            text: notification,
+            mentions:
+                participant && participant !== 'inconnu'
+                    ? [participant]
+                    : []
+        });
     } catch (sendError) {
         console.log(
-            `[ANTI-VIEW-ONCE] Impossible d'envoyer l'erreur dans l'inbox : ${sendError.message}`
+            `[ANTI-VIEW-ONCE] Impossible d'envoyer l'erreur : ${sendError.message}`
         );
     }
 }
@@ -297,31 +351,21 @@ async function sendErrorNotification(socket, inboxJid, msg, info, error) {
 
 function initAntiViewOnce(socket) {
     try {
-        console.log(
-            '[ANTI-VIEW-ONCE] Initialisation...'
-        );
+        console.log('[ANTI-VIEW-ONCE] Initialisation...');
 
         if (!socket?.user?.id) {
             console.log(
-                '[ANTI-VIEW-ONCE] Socket sans utilisateur, initialisation annulée.'
+                '[ANTI-VIEW-ONCE] Socket sans utilisateur, annulation.'
             );
-
             return;
         }
 
-        const sessionJid =
-            jidNormalizedUser(socket.user.id);
+        const sessionJid = jidNormalizedUser(socket.user.id);
+        const socketId = sessionJid
+            .split('@')[0]
+            .split(':')[0]
+            .replace(/[^0-9]/g, '');
 
-        const socketId =
-            sessionJid
-                .split('@')[0]
-                .split(':')[0]
-                .replace(/[^0-9]/g, '');
-
-        /*
-         * Empêche l'enregistrement de plusieurs listeners
-         * pour la même session.
-         */
         const existing =
             global.antiViewOnceListeners.get(socketId);
 
@@ -329,44 +373,29 @@ function initAntiViewOnce(socket) {
             console.log(
                 `[ANTI-VIEW-ONCE] Listener déjà enregistré pour ${socketId}`
             );
-
             return;
         }
 
-        /*
-         * Si une ancienne socket possède encore un listener,
-         * on le retire avant d'enregistrer le nouveau.
-         */
         if (existing?.socket && existing?.listener) {
             try {
                 existing.socket.ev.off(
                     'messages.upsert',
                     existing.listener
                 );
-
                 console.log(
                     `[ANTI-VIEW-ONCE] Ancien listener supprimé pour ${socketId}`
                 );
             } catch (error) {
                 console.log(
-                    `[ANTI-VIEW-ONCE] Erreur suppression ancien listener : ${error.message}`
+                    `[ANTI-VIEW-ONCE] Erreur suppression : ${error.message}`
                 );
             }
         }
 
-        global.antiViewOnceStates.set(
-            socketId,
-            false
-        );
+        global.antiViewOnceStates.set(socketId, false);
 
-        /*
-         * Chargement de l'état depuis MongoDB.
-         */
         loadAntiViewOnceState(socketId)
             .then(enabled => {
-                /*
-                 * Ne pas écraser un état activé entre-temps.
-                 */
                 if (
                     global.antiViewOnceStates.get(socketId) !== true
                 ) {
@@ -375,24 +404,18 @@ function initAntiViewOnce(socket) {
                         enabled === true
                     );
                 }
-
                 console.log(
-                    `[ANTI-VIEW-ONCE] État chargé : ${
-                        enabled ? 'ON' : 'OFF'
-                    }`
+                    `[ANTI-VIEW-ONCE] État chargé : ${enabled ? 'ON' : 'OFF'}`
                 );
             })
             .catch(error => {
                 console.log(
-                    `[ANTI-VIEW-ONCE] Erreur chargement état : ${error.message}`
+                    `[ANTI-VIEW-ONCE] Erreur état : ${error.message}`
                 );
             });
 
         const antiViewOnceListener = async ({ messages }) => {
             try {
-                /*
-                 * Le système est OFF : aucun traitement.
-                 */
                 if (
                     global.antiViewOnceStates.get(socketId) !== true
                 ) {
@@ -403,98 +426,118 @@ function initAntiViewOnce(socket) {
                     return;
                 }
 
-                /*
-                 * Plusieurs messages peuvent être présents
-                 * dans un même messages.upsert.
-                 */
                 for (const msg of messages) {
                     try {
-                        if (!msg?.key) {
-                            continue;
-                        }
-
-                        if (msg.key.fromMe) {
-                            continue;
-                        }
+                        if (!msg?.key) continue;
+                        if (msg.key.fromMe) continue;
 
                         const remoteJid =
                             msg.key.remoteJid || 'inconnu';
 
-                        if (
-                            remoteJid === 'status@broadcast'
-                        ) {
+                        if (remoteJid === 'status@broadcast') {
                             continue;
                         }
 
-                        const messageKeys =
-                            msg.message
-                                ? Object.keys(msg.message)
-                                : [];
+                        const messageKeys = msg.message
+                            ? Object.keys(msg.message)
+                            : [];
 
                         console.log(
-                            `[ANTI-VIEW-ONCE] Message reçu | remoteJid=${remoteJid} | fromMe=${!!msg.key.fromMe} | key.isViewOnce=${!!msg.key.isViewOnce} | messageKeys=${messageKeys.join(',') || 'aucune'}`
+                            `[ANTI-VIEW-ONCE] Message | remoteJid=${remoteJid} | key.isViewOnce=${!!msg.key.isViewOnce} | keys=${messageKeys.join(',') || 'aucune'}`
+                        );
+
+                        const info = inspectViewOnceMessage(msg);
+                        if (!info?.detected) continue;
+
+                        console.log(
+                            `[ANTI-VIEW-ONCE] Wrapper : ${info.wrapper || 'inconnu'}`
+                        );
+                        console.log(
+                            `[ANTI-VIEW-ONCE] Média : ${info.type || 'aucun'}`
                         );
 
                         /*
-                         * Détection View Once.
+                         * Si aucun média n'est présent,
+                         * on envoie juste une notification.
                          */
-                        const info =
-                            inspectViewOnceMessage(msg);
-
-                        if (!info?.detected) {
-                            continue;
-                        }
-
-                        console.log(
-                            `[ANTI-VIEW-ONCE] Wrapper détecté : ${info.wrapper || 'non identifié'}`
-                        );
-
-                        console.log(
-                            `[ANTI-VIEW-ONCE] Média détecté : ${info.type || 'aucun contenu média'}`
-                        );
-
-                        /*
-                         * Protection :
-                         * aucun téléchargement,
-                         * aucune conversion,
-                         * aucune redistribution.
-                         */
-
-                        try {
-                            await sendDetectionNotification(
-                                socket,
-                                sessionJid,
-                                msg,
-                                info
-                            );
-
-                            console.log(
-                                `[ANTI-VIEW-ONCE] Notification envoyée`
-                            );
-
-                        } catch (notificationError) {
-                            console.log(
-                                `[ANTI-VIEW-ONCE] Erreur notification : ${notificationError.message}`
-                            );
-
+                        if (!info.media || !info.type) {
                             await sendErrorNotification(
                                 socket,
                                 sessionJid,
                                 msg,
                                 info,
-                                notificationError
+                                new Error(
+                                    'Aucun média présent dans ce message Vue Unique'
+                                )
+                            );
+                            continue;
+                        }
+
+                        /*
+                         * Téléchargement du média.
+                         */
+                        let buffer;
+                        try {
+                            buffer = await downloadViewOnceMedia(
+                                info.media,
+                                info.type
+                            );
+                        } catch (downloadError) {
+                            console.log(
+                                `[ANTI-VIEW-ONCE] Erreur téléchargement : ${downloadError.message}`
+                            );
+                            await sendErrorNotification(
+                                socket,
+                                sessionJid,
+                                msg,
+                                info,
+                                downloadError
+                            );
+                            continue;
+                        }
+
+                        if (!buffer || !buffer.length) {
+                            await sendErrorNotification(
+                                socket,
+                                sessionJid,
+                                msg,
+                                info,
+                                new Error('Téléchargement vide')
+                            );
+                            continue;
+                        }
+
+                        /*
+                         * Envoi dans l'inbox.
+                         */
+                        try {
+                            await sendMediaToInbox(
+                                socket,
+                                sessionJid,
+                                msg,
+                                info,
+                                buffer
+                            );
+                            console.log(
+                                `[ANTI-VIEW-ONCE] Média envoyé dans l'inbox (${buffer.length} octets)`
+                            );
+                        } catch (sendError) {
+                            console.log(
+                                `[ANTI-VIEW-ONCE] Erreur envoi inbox : ${sendError.message}`
+                            );
+                            await sendErrorNotification(
+                                socket,
+                                sessionJid,
+                                msg,
+                                info,
+                                sendError
                             );
                         }
 
                     } catch (messageError) {
                         console.log(
-                            `[ANTI-VIEW-ONCE] Erreur traitement message : ${messageError.message}`
+                            `[ANTI-VIEW-ONCE] Erreur message : ${messageError.message}`
                         );
-
-                        /*
-                         * On tente de notifier l'inbox sans
-                         * masquer l'erreur originale.
-                         */
                         try {
                             await sendErrorNotification(
                                 socket,
@@ -506,11 +549,7 @@ function initAntiViewOnce(socket) {
                                 },
                                 messageError
                             );
-                        } catch (errorNotification) {
-                            console.log(
-                                `[ANTI-VIEW-ONCE] Erreur secondaire notification : ${errorNotification.message}`
-                            );
-                        }
+                        } catch (_) {}
                     }
                 }
 
@@ -521,18 +560,12 @@ function initAntiViewOnce(socket) {
             }
         };
 
-        socket.ev.on(
-            'messages.upsert',
-            antiViewOnceListener
-        );
+        socket.ev.on('messages.upsert', antiViewOnceListener);
 
-        global.antiViewOnceListeners.set(
-            socketId,
-            {
-                socket,
-                listener: antiViewOnceListener
-            }
-        );
+        global.antiViewOnceListeners.set(socketId, {
+            socket,
+            listener: antiViewOnceListener
+        });
 
         console.log(
             `[ANTI-VIEW-ONCE] Listener enregistré pour ${socketId}`
@@ -540,7 +573,7 @@ function initAntiViewOnce(socket) {
 
     } catch (error) {
         console.log(
-            `[ANTI-VIEW-ONCE] Erreur d'initialisation : ${error.message}`
+            `[ANTI-VIEW-ONCE] Erreur init : ${error.message}`
         );
     }
 }
@@ -554,7 +587,7 @@ module.exports = {
     category: 5,
 
     description:
-        'Détecte les messages Vue Unique sans télécharger ni redistribuer le média',
+        'Capture les messages Vue Unique et envoie le média dans ton inbox',
 
     commands: [
         'antiviewonce',
@@ -576,24 +609,19 @@ module.exports = {
         botNumber
     }) => {
         try {
-            const sessionJid =
-                jidNormalizedUser(socket.user.id);
+            const sessionJid = jidNormalizedUser(socket.user.id);
+            const sessionNumber = sessionJid
+                .split('@')[0]
+                .split(':')[0]
+                .replace(/[^0-9]/g, '');
 
-            const sessionNumber =
-                sessionJid
-                    .split('@')[0]
-                    .split(':')[0]
-                    .replace(/[^0-9]/g, '');
+            const sanitizedNumber = (botNumber || sessionNumber)
+                .replace(/[^0-9]/g, '');
 
-            const sanitizedNumber =
-                (botNumber || sessionNumber)
-                    .replace(/[^0-9]/g, '');
-
-            const normalizedSender =
-                (sender || '')
-                    .split('@')[0]
-                    .split(':')[0]
-                    .replace(/[^0-9]/g, '');
+            const normalizedSender = (sender || '')
+                .split('@')[0]
+                .split(':')[0]
+                .replace(/[^0-9]/g, '');
 
             const ownerAccess =
                 isOwner === true ||
@@ -605,22 +633,15 @@ module.exports = {
                 );
             }
 
-            const option =
-                (args?.[0] || '')
-                    .toLowerCase()
-                    .trim();
+            const option = (args?.[0] || '')
+                .toLowerCase()
+                .trim();
 
             const getState = () =>
                 global.antiViewOnceStates.get(sessionNumber) === true ||
                 global.antiViewOnceStates.get(sanitizedNumber) === true;
 
-            if (
-                ![
-                    'on',
-                    'off',
-                    'status'
-                ].includes(option)
-            ) {
+            if (!['on', 'off', 'status'].includes(option)) {
                 return reply(
                     `*👁️ Anti-Vue Unique*\n\n` +
                     `📌 *État actuel :* ${getState() ? 'ON 🟢' : 'OFF 🔴'}\n\n` +
@@ -635,22 +656,14 @@ module.exports = {
                 return reply(
                     `*👁️ Statut Anti-Vue Unique*\n\n` +
                     `🛡️ *Système :* ${getState() ? 'Actif 🟢' : 'Inactif 🔴'}\n` +
-                    `📥 *Détection automatique :* ${getState() ? 'Activée' : 'Désactivée'}`
+                    `📥 *Capture automatique :* ${getState() ? 'Activée' : 'Désactivée'}`
                 );
             }
 
-            const enabled =
-                option === 'on';
+            const enabled = option === 'on';
 
-            global.antiViewOnceStates.set(
-                sessionNumber,
-                enabled
-            );
-
-            global.antiViewOnceStates.set(
-                sanitizedNumber,
-                enabled
-            );
+            global.antiViewOnceStates.set(sessionNumber, enabled);
+            global.antiViewOnceStates.set(sanitizedNumber, enabled);
 
             if (sessionConfig) {
                 sessionConfig.ANTI_VIEW_ONCE =
@@ -658,51 +671,37 @@ module.exports = {
             }
 
             const currentData =
-                activeSockets?.get?.(
-                    sanitizedNumber
-                );
+                activeSockets?.get?.(sanitizedNumber);
 
             if (currentData) {
-                currentData.config =
-                    sessionConfig;
-
-                activeSockets.set(
-                    sanitizedNumber,
-                    currentData
-                );
+                currentData.config = sessionConfig;
+                activeSockets.set(sanitizedNumber, currentData);
             }
 
-            const Session =
-                mongoose.models.SessionNew;
-
+            const Session = mongoose.models.SessionNew;
             if (Session) {
                 await Session.findOneAndUpdate(
-                    {
-                        number: sanitizedNumber
-                    },
+                    { number: sanitizedNumber },
                     {
                         $set: {
                             config: sessionConfig,
                             updatedAt: new Date()
                         }
                     },
-                    {
-                        upsert: true
-                    }
+                    { upsert: true }
                 );
             }
 
             return reply(
                 enabled
-                    ? `🟢 *Anti-View-Once activé*\n\nLes messages Vue Unique seront détectés automatiquement. Le média protégé ne sera pas téléchargé ni redistribué.`
-                    : `🔴 *Anti-View-Once désactivé*\n\nLes messages Vue Unique ne seront plus traités automatiquement.`
+                    ? `🟢 *Anti-View-Once activé*\n\nLes médias Vue Unique seront automatiquement téléchargés et envoyés dans ton inbox.`
+                    : `🔴 *Anti-View-Once désactivé*\n\nLes messages Vue Unique ne seront plus capturés.`
             );
 
         } catch (error) {
             console.log(
                 `[ANTI-VIEW-ONCE] Erreur commande : ${error.message}`
             );
-
             return reply(
                 `❌ *Impossible de modifier Anti-View-Once.*\n${error.message}`
             );
