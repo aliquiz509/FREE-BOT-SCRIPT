@@ -6,6 +6,7 @@ const {
 } = require('child_process');
 const { sms } = require("./msg");
 const router = express.Router();
+const MEDIA_TYPES = ['imageMessage', 'videoMessage', 'audioMessage', 'stickerMessage', 'documentMessage'];
 const pino = require('pino');
 const mongoose = require('mongoose');
 const moment = require('moment-timezone');
