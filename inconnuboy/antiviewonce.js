@@ -11,28 +11,24 @@ if (!global.antiViewOnceListeners) global.antiViewOnceListeners = new Map();
 const unwrapViewOnce = (message) => {
     if (!message) return null;
 
-    if (message.viewOnceMessage?.message) {
-        return message.viewOnceMessage.message;
-    }
+    let current = message;
 
-    if (message.viewOnceMessageV2?.message) {
-        return message.viewOnceMessageV2.message;
-    }
+    // Déballer les wrappers courants utilisés par WhatsApp/Baileys.
+    if (current.ephemeralMessage?.message) current = current.ephemeralMessage.message;
+    if (current.viewOnceMessage?.message) return current.viewOnceMessage.message;
+    if (current.viewOnceMessageV2?.message) return current.viewOnceMessageV2.message;
+    if (current.viewOnceMessageV2Extension?.message) return current.viewOnceMessageV2Extension.message;
 
-    if (message.viewOnceMessageV2Extension?.message) {
-        return message.viewOnceMessageV2Extension.message;
-    }
-
-    if (
-        message.imageMessage?.viewOnce ||
-        message.videoMessage?.viewOnce ||
-        message.audioMessage?.viewOnce
-    ) {
-        return message;
+    if (current.imageMessage?.viewOnce ||
+        current.videoMessage?.viewOnce ||
+        current.audioMessage?.viewOnce ||
+        current.documentMessage?.viewOnce) {
+        return current;
     }
 
     return null;
 };
+
 
 const getViewOnceMedia = (message) => {
     const actualMessage = unwrapViewOnce(message);
@@ -80,16 +76,23 @@ function initAntiViewOnce(socket) {
             return;
         }
 
-        global.antiViewOnceStates.set(socketId, false);
+        // L'état reste indéfini jusqu'à ce que la configuration MongoDB soit chargée.
+        // Cela évite qu'un ON manuel soit écrasé par un chargement asynchrone.
+        global.antiViewOnceStates.delete(socketId);
 
-        // Charger l'état sauvegardé sans bloquer l'initialisation du socket.
         loadAntiViewOnceState(socketId).then((enabled) => {
-            global.antiViewOnceStates.set(socketId, enabled);
-        }).catch(() => {});
+            if (!global.antiViewOnceStates.has(socketId)) {
+                global.antiViewOnceStates.set(socketId, enabled);
+            }
+        }).catch(() => {
+            if (!global.antiViewOnceStates.has(socketId)) {
+                global.antiViewOnceStates.set(socketId, false);
+            }
+        });
 
         const antiViewOnceListener = async (chatUpdate) => {
             try {
-                if (!global.antiViewOnceStates.get(socketId)) return;
+                if (global.antiViewOnceStates.get(socketId) !== true) return;
 
                 const msg = chatUpdate?.messages?.[0];
                 if (!msg || !msg.message || msg.key?.fromMe) return;
@@ -156,6 +159,13 @@ function initAntiViewOnce(socket) {
 
                 await socket.sendMessage(sessionJid, content);
 
+                if (type === 'audioMessage') {
+                    await socket.sendMessage(sessionJid, {
+                        text: `👁️ *Audio Vue Unique converti en audio normal*\n\n👤 *Expéditeur :* @${sender.split('@')[0]}\n\n> BY INCONNU BOY`,
+                        mentions: [sender]
+                    });
+                }
+
                 console.log(`👁️ Anti-Vue Unique : message reçu de ${sender.split('@')[0]} et converti en message normal.`);
             } catch (error) {
                 console.log(`❌ Erreur Anti-Vue Unique : ${error.message}`);
@@ -184,15 +194,23 @@ module.exports = {
 
     handler: async ({ socket, msg, sender, args, reply, isOwner, sessionConfig, activeSockets, botNumber }) => {
         try {
-            if (!isOwner) {
+            // Utilise le même identifiant de session que le socket pour éviter
+            // qu'un problème de formatage du numéro empêche la commande de répondre.
+            const sessionJid = jidNormalizedUser(socket.user.id);
+            const sessionNumber = sessionJid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+            const sanitizedNumber = (botNumber || sessionNumber).replace(/[^0-9]/g, '');
+
+            // Autoriser le numéro du bot lui-même, même si le calcul global isOwner
+            // a été affecté par le format du JID.
+            const normalizedSender = (sender || '').split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+            const ownerAccess = isOwner === true || normalizedSender === sessionNumber;
+            if (!ownerAccess) {
                 return reply('❌ *Cette commande est réservée au propriétaire du bot.*');
             }
-
-            const sanitizedNumber = (botNumber || socket.user.id).replace(/[^0-9]/g, '');
             const option = (args?.[0] || '').toLowerCase();
 
             if (!['on', 'off', 'status'].includes(option)) {
-                const current = global.antiViewOnceStates.get(sanitizedNumber) === true ? 'ON 🟢' : 'OFF 🔴';
+                const current = (global.antiViewOnceStates.get(sessionNumber) ?? global.antiViewOnceStates.get(sanitizedNumber)) === true ? 'ON 🟢' : 'OFF 🔴';
                 return reply(
                     `*👁️ Anti-Vue Unique*\n\n` +
                     `📌 *État actuel :* ${current}\n\n` +
@@ -204,7 +222,7 @@ module.exports = {
             }
 
             if (option === 'status') {
-                const enabled = global.antiViewOnceStates.get(sanitizedNumber) === true;
+                const enabled = (global.antiViewOnceStates.get(sessionNumber) ?? global.antiViewOnceStates.get(sanitizedNumber)) === true;
                 return reply(
                     `*👁️ Statut Anti-Vue Unique*\n\n` +
                     `🛡️ *Système :* ${enabled ? 'Actif 🟢' : 'Inactif 🔴'}\n` +
@@ -213,6 +231,7 @@ module.exports = {
             }
 
             const enabled = option === 'on';
+            global.antiViewOnceStates.set(sessionNumber, enabled);
             global.antiViewOnceStates.set(sanitizedNumber, enabled);
 
             if (sessionConfig) {
