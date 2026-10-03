@@ -11,16 +11,63 @@
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 
 <style>
+
 :root{
   --bg:#03060d;
   --bg2:#07101d;
   --panel:rgba(8,16,30,.78);
+
   --cyan:#00eaff;
   --blue:#008cff;
+
   --text:#edfaff;
   --muted:#8194ad;
+
   --ok:#42f5a7;
   --err:#ff5575;
+
+  --border:rgba(0,234,255,.22);
+  --input:rgba(0,234,255,.035);
+  --step:rgba(255,255,255,.018);
+
+  --button-text:#001017;
+}
+
+/* =========================
+   MODE JOUR
+========================= */
+
+body.light{
+  --bg:#eef6fb;
+  --bg2:#dfeef7;
+  --panel:rgba(255,255,255,.78);
+
+  --text:#102333;
+  --muted:#60778b;
+
+  --border:rgba(0,130,180,.22);
+  --input:rgba(255,255,255,.75);
+  --step:rgba(0,80,120,.045);
+
+  --button-text:#ffffff;
+
+  background:
+    radial-gradient(
+      circle at 50% -10%,
+      rgba(0,200,255,.22),
+      transparent 38%
+    ),
+    radial-gradient(
+      circle at 10% 90%,
+      rgba(39,108,255,.13),
+      transparent 35%
+    ),
+    linear-gradient(
+      135deg,
+      #f7fcff,
+      #e6f3fa 50%,
+      #dcecf5
+    );
 }
 
 *{
@@ -36,64 +83,194 @@ body{
 
 body{
   min-height:100vh;
+
   display:flex;
   align-items:center;
   justify-content:center;
+
   padding:30px 16px;
 
   color:var(--text);
+
   font-family:'Space Grotesk',sans-serif;
 
   background:
-    radial-gradient(circle at 50% -10%,rgba(0,234,255,.13),transparent 35%),
-    radial-gradient(circle at 10% 90%,rgba(39,108,255,.12),transparent 35%),
-    radial-gradient(circle at 90% 60%,rgba(0,234,255,.07),transparent 30%),
-    linear-gradient(135deg,#02050b,#050b15 45%,#02050b);
+    radial-gradient(
+      circle at 50% -10%,
+      rgba(0,234,255,.13),
+      transparent 35%
+    ),
+    radial-gradient(
+      circle at 10% 90%,
+      rgba(39,108,255,.12),
+      transparent 35%
+    ),
+    radial-gradient(
+      circle at 90% 60%,
+      rgba(0,234,255,.07),
+      transparent 30%
+    ),
+    linear-gradient(
+      135deg,
+      #02050b,
+      #050b15 45%,
+      #02050b
+    );
 
   overflow-x:hidden;
+
+  transition:
+    background .5s ease,
+    color .5s ease;
 }
 
 /* =========================
-   ARRIÈRE-PLAN ANIMÉ
+   BOUTON MODE JOUR / NUIT
+========================= */
+
+.theme-toggle{
+  position:fixed;
+
+  top:18px;
+  right:18px;
+
+  z-index:100;
+
+  width:44px;
+  height:44px;
+
+  padding:0;
+  margin:0;
+
+  display:flex;
+  align-items:center;
+  justify-content:center;
+
+  border-radius:50%;
+
+  border:1px solid rgba(0,234,255,.25);
+
+  background:rgba(7,16,29,.72);
+
+  color:var(--cyan);
+
+  font-size:19px;
+
+  cursor:pointer;
+
+  backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
+
+  box-shadow:
+    0 8px 25px rgba(0,0,0,.25),
+    0 0 20px rgba(0,234,255,.08);
+
+  transition:
+    transform .25s ease,
+    background .35s ease,
+    color .35s ease,
+    border-color .35s ease;
+}
+
+.theme-toggle:hover{
+  transform:rotate(18deg) scale(1.08);
+}
+
+body.light .theme-toggle{
+  background:rgba(255,255,255,.82);
+  color:#008cff;
+
+  border-color:rgba(0,140,255,.22);
+
+  box-shadow:
+    0 8px 25px rgba(50,100,130,.16),
+    0 0 20px rgba(0,140,255,.08);
+}
+
+.theme-icon{
+  display:block;
+
+  transition:
+    transform .45s ease,
+    opacity .25s ease;
+}
+
+.theme-toggle.animate .theme-icon{
+  transform:rotate(180deg) scale(.75);
+}
+
+/* =========================
+   ARRIÈRE-PLAN
 ========================= */
 
 .background{
   position:fixed;
   inset:0;
+
   overflow:hidden;
+
   pointer-events:none;
+
   z-index:0;
+
+  transition:opacity .5s ease;
 }
 
 .grid{
   position:absolute;
+
   inset:-50%;
+
   opacity:.15;
 
   background-image:
-    linear-gradient(rgba(0,234,255,.08) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(0,234,255,.08) 1px,transparent 1px);
+    linear-gradient(
+      rgba(0,234,255,.08) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      rgba(0,234,255,.08) 1px,
+      transparent 1px
+    );
 
   background-size:45px 45px;
 
-  transform:perspective(500px) rotateX(60deg);
+  transform:
+    perspective(500px)
+    rotateX(60deg);
+
   animation:gridMove 18s linear infinite;
 }
 
+body.light .grid{
+  opacity:.08;
+}
+
 @keyframes gridMove{
+
   from{
-    transform:perspective(500px) rotateX(60deg) translateY(0);
+    transform:
+      perspective(500px)
+      rotateX(60deg)
+      translateY(0);
   }
 
   to{
-    transform:perspective(500px) rotateX(60deg) translateY(90px);
+    transform:
+      perspective(500px)
+      rotateX(60deg)
+      translateY(90px);
   }
+
 }
 
 .orb{
   position:absolute;
+
   width:320px;
   height:320px;
+
   border-radius:50%;
 
   background:
@@ -105,7 +282,13 @@ body{
     );
 
   filter:blur(8px);
-  animation:orbFloat 9s ease-in-out infinite;
+
+  animation:
+    orbFloat 9s ease-in-out infinite;
+}
+
+body.light .orb{
+  opacity:.6;
 }
 
 .orb.one{
@@ -116,17 +299,24 @@ body{
 .orb.two{
   right:-120px;
   bottom:-100px;
+
   animation-delay:-4s;
 }
 
 @keyframes orbFloat{
+
   0%,100%{
-    transform:translate(0,0) scale(1);
+    transform:
+      translate(0,0)
+      scale(1);
   }
 
   50%{
-    transform:translate(35px,-25px) scale(1.12);
+    transform:
+      translate(35px,-25px)
+      scale(1.12);
   }
+
 }
 
 .stars{
@@ -136,20 +326,30 @@ body{
 
 .star{
   position:absolute;
+
   width:2px;
   height:2px;
 
   background:#fff;
+
   border-radius:50%;
 
   box-shadow:
     0 0 5px rgba(255,255,255,.8),
     0 0 12px rgba(0,234,255,.5);
 
-  animation:starPulse 3s ease-in-out infinite;
+  animation:
+    starPulse 3s ease-in-out infinite;
+}
+
+body.light .star{
+  background:#4b8baa;
+  box-shadow:none;
+  opacity:.25;
 }
 
 @keyframes starPulse{
+
   0%,100%{
     opacity:.15;
     transform:scale(.7);
@@ -159,14 +359,16 @@ body{
     opacity:1;
     transform:scale(1.5);
   }
+
 }
 
 /* =========================
-   CARTE PRINCIPALE
+   CARTE
 ========================= */
 
 .card{
   position:relative;
+
   z-index:2;
 
   width:100%;
@@ -181,7 +383,8 @@ body{
       rgba(3,10,20,.90)
     );
 
-  border:1px solid rgba(0,234,255,.22);
+  border:1px solid var(--border);
+
   border-radius:24px;
 
   box-shadow:
@@ -197,42 +400,65 @@ body{
   animation:
     cardEnter .8s cubic-bezier(.2,.8,.2,1),
     cardFloat 6s ease-in-out infinite;
+
+  transition:
+    background .5s ease,
+    border-color .5s ease,
+    box-shadow .5s ease;
+}
+
+body.light .card{
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255,255,255,.88),
+      rgba(235,247,253,.82)
+    );
+
+  box-shadow:
+    0 30px 80px rgba(30,80,110,.18),
+    0 0 50px rgba(0,150,220,.07);
 }
 
 @keyframes cardEnter{
+
   from{
     opacity:0;
-    transform:translateY(30px) scale(.96);
+    transform:
+      translateY(30px)
+      scale(.96);
   }
 
   to{
     opacity:1;
-    transform:translateY(0) scale(1);
+    transform:
+      translateY(0)
+      scale(1);
   }
+
 }
 
 @keyframes cardFloat{
+
   0%,100%{
-    box-shadow:
-      0 30px 100px rgba(0,0,0,.65),
-      0 0 60px rgba(0,234,255,.05),
-      inset 0 1px 0 rgba(255,255,255,.04);
+    transform:translateY(0);
   }
 
   50%{
-    box-shadow:
-      0 35px 110px rgba(0,0,0,.7),
-      0 0 70px rgba(0,234,255,.12),
-      inset 0 1px 0 rgba(255,255,255,.05);
+    transform:translateY(-3px);
   }
+
 }
 
 .card::before{
   content:"";
+
   position:absolute;
+
   inset:0;
 
   border-radius:24px;
+
   padding:1px;
 
   background:
@@ -247,7 +473,8 @@ body{
 
   background-size:300% 300%;
 
-  animation:borderMove 7s linear infinite;
+  animation:
+    borderMove 7s linear infinite;
 
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
@@ -260,6 +487,7 @@ body{
 }
 
 @keyframes borderMove{
+
   0%{
     background-position:0% 50%;
   }
@@ -271,6 +499,7 @@ body{
   100%{
     background-position:0% 50%;
   }
+
 }
 
 /* =========================
@@ -279,6 +508,7 @@ body{
 
 .logo-area{
   text-align:center;
+
   margin-bottom:26px;
 }
 
@@ -289,6 +519,7 @@ body{
   margin:0 auto 18px;
 
   display:flex;
+
   align-items:center;
   justify-content:center;
 
@@ -310,29 +541,40 @@ body{
 
   position:relative;
 
-  animation:ringPulse 3s ease-in-out infinite;
+  animation:
+    ringPulse 3s ease-in-out infinite;
 }
 
 .logo-ring::before,
 .logo-ring::after{
   content:"";
+
   position:absolute;
+
   inset:-8px;
 
-  border:1px solid rgba(0,234,255,.12);
+  border:
+    1px solid rgba(0,234,255,.12);
+
   border-radius:50%;
 
-  animation:spin 8s linear infinite;
+  animation:
+    spin 8s linear infinite;
 }
 
 .logo-ring::after{
   inset:-15px;
-  border-color:rgba(39,108,255,.08);
+
+  border-color:
+    rgba(39,108,255,.08);
+
   animation-direction:reverse;
+
   animation-duration:12s;
 }
 
 @keyframes ringPulse{
+
   0%,100%{
     transform:scale(1);
   }
@@ -340,18 +582,24 @@ body{
   50%{
     transform:scale(1.04);
   }
+
 }
 
 @keyframes spin{
+
   to{
     transform:rotate(360deg);
   }
+
 }
 
 .logo-core{
   font-family:'Orbitron',sans-serif;
+
   font-weight:900;
+
   font-size:19px;
+
   color:var(--cyan);
 
   text-shadow:
@@ -363,7 +611,9 @@ h1{
   margin:0;
 
   font-family:'Orbitron',sans-serif;
+
   font-size:28px;
+
   font-weight:900;
 
   letter-spacing:.18em;
@@ -384,13 +634,17 @@ h1{
 
   color:transparent;
 
-  animation:titleShine 5s linear infinite;
+  animation:
+    titleShine 5s linear infinite;
 }
 
 @keyframes titleShine{
+
   to{
-    background-position:250% center;
+    background-position:
+      250% center;
   }
+
 }
 
 .tagline{
@@ -399,25 +653,30 @@ h1{
   color:var(--muted);
 
   font-size:12.5px;
+
   letter-spacing:.07em;
 }
 
 /* =========================
-   ÉTAT DU SYSTÈME
+   SYSTÈME
 ========================= */
 
 .system-line{
   display:flex;
+
   align-items:center;
   justify-content:center;
+
   gap:8px;
 
   margin-bottom:25px;
 
   color:#627891;
+
   font-size:10px;
 
   letter-spacing:.12em;
+
   text-transform:uppercase;
 }
 
@@ -433,10 +692,12 @@ h1{
     0 0 8px var(--ok),
     0 0 16px rgba(66,245,167,.35);
 
-  animation:systemPulse 1.7s ease-in-out infinite;
+  animation:
+    systemPulse 1.7s ease-in-out infinite;
 }
 
 @keyframes systemPulse{
+
   0%,100%{
     opacity:.45;
     transform:scale(.8);
@@ -446,10 +707,11 @@ h1{
     opacity:1;
     transform:scale(1.2);
   }
+
 }
 
 /* =========================
-   FORMULAIRE
+   CHAMP
 ========================= */
 
 label{
@@ -460,9 +722,11 @@ label{
   color:#7e91aa;
 
   font-size:11px;
+
   font-weight:600;
 
   letter-spacing:.12em;
+
   text-transform:uppercase;
 }
 
@@ -474,6 +738,7 @@ label{
   content:"";
 
   position:absolute;
+
   left:14px;
   top:50%;
 
@@ -484,7 +749,8 @@ label{
 
   background:var(--cyan);
 
-  box-shadow:0 0 10px var(--cyan);
+  box-shadow:
+    0 0 10px var(--cyan);
 
   transform:translateY(-50%);
 
@@ -496,22 +762,23 @@ label{
 input[type="text"]{
   width:100%;
 
-  background:
-    linear-gradient(
-      135deg,
-      rgba(0,234,255,.035),
-      rgba(0,0,0,.2)
-    );
+  background:var(--input);
 
-  border:1px solid rgba(0,234,255,.13);
+  border:
+    1px solid rgba(0,234,255,.13);
 
   border-radius:13px;
 
-  padding:15px 16px 15px 32px;
+  padding:
+    15px
+    16px
+    15px
+    32px;
 
   color:var(--text);
 
   font-family:'JetBrains Mono',monospace;
+
   font-size:14px;
 
   outline:none;
@@ -519,7 +786,8 @@ input[type="text"]{
   transition:
     border-color .25s,
     box-shadow .25s,
-    transform .25s;
+    transform .25s,
+    background .4s;
 }
 
 input[type="text"]::placeholder{
@@ -527,7 +795,8 @@ input[type="text"]::placeholder{
 }
 
 input[type="text"]:focus{
-  border-color:rgba(0,234,255,.6);
+  border-color:
+    rgba(0,234,255,.6);
 
   box-shadow:
     0 0 0 3px rgba(0,234,255,.07),
@@ -537,7 +806,7 @@ input[type="text"]:focus{
 }
 
 /* =========================
-   BOUTON
+   BOUTON PRINCIPAL
 ========================= */
 
 button{
@@ -549,7 +818,9 @@ button{
 
   padding:15px 16px;
 
-  border:1px solid rgba(0,234,255,.45);
+  border:
+    1px solid rgba(0,234,255,.45);
+
   border-radius:13px;
 
   background:
@@ -562,10 +833,12 @@ button{
 
   background-size:200% auto;
 
-  color:#001017;
+  color:var(--button-text);
 
   font-family:'Space Grotesk',sans-serif;
+
   font-weight:800;
+
   font-size:14px;
 
   letter-spacing:.04em;
@@ -582,19 +855,23 @@ button{
     box-shadow .2s,
     opacity .2s;
 
-  animation:buttonGradient 4s linear infinite;
+  animation:
+    buttonGradient 4s linear infinite;
 }
 
 @keyframes buttonGradient{
+
   to{
     background-position:200% center;
   }
+
 }
 
 button::before{
   content:"";
 
   position:absolute;
+
   top:0;
   left:-120%;
 
@@ -611,10 +888,12 @@ button::before{
 
   transform:skewX(-20deg);
 
-  animation:buttonShine 3.5s ease-in-out infinite;
+  animation:
+    buttonShine 3.5s ease-in-out infinite;
 }
 
 @keyframes buttonShine{
+
   0%,40%{
     left:-120%;
   }
@@ -622,6 +901,7 @@ button::before{
   70%,100%{
     left:150%;
   }
+
 }
 
 button:hover{
@@ -638,12 +918,14 @@ button:active{
 
 button:disabled{
   opacity:.55;
+
   cursor:not-allowed;
+
   transform:none;
 }
 
 /* =========================
-   CODE DE JUMELAGE
+   RÉSULTAT
 ========================= */
 
 .result{
@@ -653,7 +935,9 @@ button:disabled{
 
   padding:21px 16px 18px;
 
-  border:1px solid rgba(0,234,255,.14);
+  border:
+    1px solid rgba(0,234,255,.14);
+
   border-radius:16px;
 
   background:
@@ -670,6 +954,15 @@ button:disabled{
   overflow:hidden;
 }
 
+body.light .result{
+  background:
+    linear-gradient(
+      145deg,
+      rgba(0,180,230,.07),
+      rgba(255,255,255,.35)
+    );
+}
+
 .result::before{
   content:"";
 
@@ -683,26 +976,38 @@ button:disabled{
 
   transform:translateX(-50%);
 
-  background:rgba(0,234,255,.08);
+  background:
+    rgba(0,234,255,.08);
 
   filter:blur(35px);
 }
 
 .result.show{
   display:block;
-  animation:resultEnter .55s cubic-bezier(.2,.8,.2,1);
+
+  animation:
+    resultEnter .55s
+    cubic-bezier(.2,.8,.2,1);
 }
 
 @keyframes resultEnter{
+
   from{
     opacity:0;
-    transform:translateY(15px) scale(.96);
+
+    transform:
+      translateY(15px)
+      scale(.96);
   }
 
   to{
     opacity:1;
-    transform:translateY(0) scale(1);
+
+    transform:
+      translateY(0)
+      scale(1);
   }
+
 }
 
 .result .label{
@@ -711,9 +1016,11 @@ button:disabled{
   color:#6d839d;
 
   font-size:10px;
+
   font-weight:700;
 
   letter-spacing:.16em;
+
   text-transform:uppercase;
 
   margin-bottom:10px;
@@ -725,6 +1032,7 @@ button:disabled{
   font-family:'JetBrains Mono',monospace;
 
   font-size:32px;
+
   font-weight:700;
 
   letter-spacing:.14em;
@@ -735,10 +1043,14 @@ button:disabled{
     0 0 8px rgba(0,234,255,.55),
     0 0 25px rgba(0,234,255,.22);
 
-  animation:codeGlow 2s ease-in-out infinite;
+  animation:
+    codeGlow 2s ease-in-out infinite;
+
+  word-break:break-all;
 }
 
 @keyframes codeGlow{
+
   0%,100%{
     text-shadow:
       0 0 8px rgba(0,234,255,.45),
@@ -750,10 +1062,86 @@ button:disabled{
       0 0 12px rgba(0,234,255,.8),
       0 0 35px rgba(0,234,255,.3);
   }
+
 }
 
 /* =========================
-   MESSAGES
+   BOUTON COPIER
+========================= */
+
+.copy-btn{
+  position:relative;
+
+  display:inline-flex;
+
+  align-items:center;
+  justify-content:center;
+
+  gap:7px;
+
+  width:auto;
+
+  min-width:105px;
+
+  margin-top:15px;
+
+  padding:9px 15px;
+
+  border:
+    1px solid rgba(0,234,255,.25);
+
+  border-radius:9px;
+
+  background:
+    rgba(0,234,255,.07);
+
+  color:var(--cyan);
+
+  font-size:11px;
+
+  font-weight:700;
+
+  letter-spacing:.04em;
+
+  box-shadow:none;
+
+  animation:none;
+
+  overflow:hidden;
+}
+
+.copy-btn::before{
+  display:none;
+}
+
+.copy-btn:hover{
+  transform:translateY(-1px);
+
+  background:
+    rgba(0,234,255,.13);
+
+  border-color:
+    rgba(0,234,255,.45);
+
+  box-shadow:
+    0 5px 18px rgba(0,234,255,.08);
+}
+
+.copy-btn.copied{
+  color:#06170f;
+
+  background:
+    var(--ok);
+
+  border-color:
+    var(--ok);
+
+  box-shadow:
+    0 0 20px rgba(66,245,167,.2);
+}
+
+/* =========================
+   STATUT
 ========================= */
 
 .status{
@@ -773,13 +1161,15 @@ button:disabled{
 .status.err{
   color:var(--err);
 
-  text-shadow:0 0 12px rgba(255,85,117,.25);
+  text-shadow:
+    0 0 12px rgba(255,85,117,.25);
 }
 
 .status.ok{
   color:var(--ok);
 
-  text-shadow:0 0 12px rgba(66,245,167,.2);
+  text-shadow:
+    0 0 12px rgba(66,245,167,.2);
 }
 
 /* =========================
@@ -790,17 +1180,25 @@ button:disabled{
   position:relative;
 
   margin-top:22px;
+
   padding:17px;
 
-  border:1px solid rgba(255,255,255,.045);
+  border:
+    1px solid rgba(255,255,255,.045);
+
   border-radius:13px;
 
-  background:rgba(255,255,255,.018);
+  background:var(--step);
 
   color:#6f8199;
 
   font-size:11.5px;
+
   line-height:1.8;
+
+  transition:
+    background .4s ease,
+    border-color .4s ease;
 }
 
 .steps::before{
@@ -809,6 +1207,7 @@ button:disabled{
   position:absolute;
 
   left:0;
+
   top:15px;
   bottom:15px;
 
@@ -821,11 +1220,16 @@ button:disabled{
       transparent
     );
 
-  box-shadow:0 0 10px rgba(0,234,255,.3);
+  box-shadow:
+    0 0 10px rgba(0,234,255,.3);
 }
 
 .steps b{
   color:#b9d0df;
+}
+
+body.light .steps b{
+  color:#31566d;
 }
 
 /* =========================
@@ -864,6 +1268,7 @@ footer span{
 
   .card{
     padding:29px 20px 24px;
+
     border-radius:21px;
   }
 
@@ -883,6 +1288,15 @@ footer span{
   .steps{
     font-size:11px;
   }
+
+  .theme-toggle{
+    top:13px;
+    right:13px;
+
+    width:40px;
+    height:40px;
+  }
+
 }
 
 @media(prefers-reduced-motion:reduce){
@@ -891,36 +1305,76 @@ footer span{
   *::before,
   *::after{
     animation-duration:.01ms !important;
+
     animation-iteration-count:1 !important;
+
     scroll-behavior:auto !important;
   }
+
 }
+
 </style>
 </head>
 
 <body>
+
+<!-- =========================
+     BOUTON MODE JOUR / NUIT
+========================= -->
+
+<button
+  class="theme-toggle"
+  id="themeToggle"
+  type="button"
+  aria-label="Activer le mode jour"
+  title="Changer de mode"
+>
+  <span
+    class="theme-icon"
+    id="themeIcon"
+  >☀️</span>
+</button>
+
+
+<!-- =========================
+     ARRIÈRE-PLAN ANIMÉ
+========================= -->
 
 <div class="background">
 
   <div class="grid"></div>
 
   <div class="orb one"></div>
+
   <div class="orb two"></div>
 
-  <div class="stars" id="stars"></div>
+  <div
+    class="stars"
+    id="stars"
+  ></div>
 
 </div>
 
+
+<!-- =========================
+     CARTE PRINCIPALE
+========================= -->
 
 <div class="card">
 
   <div class="logo-area">
 
     <div class="logo-ring">
-      <div class="logo-core">D</div>
+
+      <div class="logo-core">
+        D
+      </div>
+
     </div>
 
-    <h1>DUBED-MD</h1>
+    <h1>
+      DUBED-MD
+    </h1>
 
     <p class="tagline">
       Système sécurisé de jumelage WhatsApp
@@ -930,14 +1384,18 @@ footer span{
 
 
   <div class="system-line">
+
     <span class="system-dot"></span>
+
     SYSTÈME DUBED-MD EN LIGNE
+
   </div>
 
 
   <label for="number">
     Numéro WhatsApp
   </label>
+
 
   <div class="input-wrapper">
 
@@ -954,10 +1412,15 @@ footer span{
   <button
     id="pairBtn"
     onclick="requestCode()"
+    type="button"
   >
     Obtenir le code de jumelage
   </button>
 
+
+  <!-- =========================
+       CODE DE JUMELAGE
+  ========================= -->
 
   <div
     class="result"
@@ -968,12 +1431,23 @@ footer span{
       Votre code de jumelage
     </div>
 
+
     <div
       class="code"
       id="code"
     >
       — — — —
     </div>
+
+
+    <button
+      class="copy-btn"
+      id="copyBtn"
+      type="button"
+      onclick="copyCode()"
+    >
+      📋 Copier
+    </button>
 
   </div>
 
@@ -984,11 +1458,19 @@ footer span{
   ></div>
 
 
+  <!-- =========================
+       INSTRUCTIONS
+  ========================= -->
+
   <div class="steps">
 
-    1. Ouvrez WhatsApp → <b>Paramètres → Appareils connectés</b><br/>
+    1. Ouvrez WhatsApp →
+    <b>Paramètres → Appareils connectés</b>
+    <br/>
 
-    2. Appuyez sur <b>Connecter un appareil → Se connecter avec un numéro de téléphone</b><br/>
+    2. Appuyez sur
+    <b>Connecter un appareil → Se connecter avec un numéro de téléphone</b>
+    <br/>
 
     3. Saisissez le code affiché ci-dessus avant son expiration
 
@@ -996,7 +1478,11 @@ footer span{
 
 
   <footer>
-    <span>DUBED-MD</span> • CRÉÉ POUR LA COMMUNAUTÉ
+
+    <span>DUBED-MD</span>
+    •
+    CRÉÉ POUR LA COMMUNAUTÉ
+
   </footer>
 
 </div>
@@ -1020,14 +1506,15 @@ footer span{
     const star =
       document.createElement('span');
 
-    star.className = 'star';
+    star.className =
+      'star';
 
     const size =
       Math.random() > .9
-      ? 3
-      : Math.random() > .5
-      ? 2
-      : 1;
+        ? 3
+        : Math.random() > .5
+          ? 2
+          : 1;
 
     star.style.width =
       size + 'px';
@@ -1055,8 +1542,165 @@ footer span{
 
 
 /* =========================
+   MODE JOUR / NUIT
+========================= */
+
+const themeToggle =
+  document.getElementById('themeToggle');
+
+const themeIcon =
+  document.getElementById('themeIcon');
+
+
+function updateThemeIcon(){
+
+  if(document.body.classList.contains('light')){
+
+    themeIcon.textContent =
+      '🌙';
+
+    themeToggle.setAttribute(
+      'aria-label',
+      'Activer le mode nuit'
+    );
+
+    themeToggle.setAttribute(
+      'title',
+      'Passer au mode nuit'
+    );
+
+  }else{
+
+    themeIcon.textContent =
+      '☀️';
+
+    themeToggle.setAttribute(
+      'aria-label',
+      'Activer le mode jour'
+    );
+
+    themeToggle.setAttribute(
+      'title',
+      'Passer au mode jour'
+    );
+
+  }
+
+}
+
+
+themeToggle.addEventListener(
+  'click',
+  function(){
+
+    themeToggle.classList.add(
+      'animate'
+    );
+
+    document.body.classList.toggle(
+      'light'
+    );
+
+    updateThemeIcon();
+
+    setTimeout(
+      function(){
+
+        themeToggle.classList.remove(
+          'animate'
+        );
+
+      },
+      450
+    );
+
+  }
+);
+
+
+/* =========================
+   COPIER LE CODE
+========================= */
+
+async function copyCode(){
+
+  const codeEl =
+    document.getElementById('code');
+
+  const copyBtn =
+    document.getElementById('copyBtn');
+
+  const code =
+    codeEl.textContent.trim();
+
+
+  if(
+    !code ||
+    code === '— — — —'
+  ){
+
+    return;
+
+  }
+
+
+  try{
+
+    await navigator.clipboard.writeText(
+      code
+    );
+
+  }catch(err){
+
+    const temp =
+      document.createElement('textarea');
+
+    temp.value =
+      code;
+
+    document.body.appendChild(
+      temp
+    );
+
+    temp.select();
+
+    document.execCommand(
+      'copy'
+    );
+
+    temp.remove();
+
+  }
+
+
+  copyBtn.textContent =
+    '✓ Copié !';
+
+  copyBtn.classList.add(
+    'copied'
+  );
+
+
+  setTimeout(
+    function(){
+
+      copyBtn.textContent =
+        '📋 Copier';
+
+      copyBtn.classList.remove(
+        'copied'
+      );
+
+    },
+    1800
+  );
+
+}
+
+
+/* =========================
    FONCTION DE JUMELAGE
-   LOGIQUE CONSERVÉE
+   LOGIQUE ORIGINALE CONSERVÉE
 ========================= */
 
 async function requestCode(){
@@ -1078,11 +1722,17 @@ async function requestCode(){
 
 
   const number =
-    numberInput.value.replace(/[^0-9]/g, '');
+    numberInput.value.replace(
+      /[^0-9]/g,
+      ''
+    );
 
 
-  statusEl.className = 'status';
-  statusEl.textContent = '';
+  statusEl.className =
+    'status';
+
+  statusEl.textContent =
+    '';
 
 
   if(!number){
@@ -1094,15 +1744,19 @@ async function requestCode(){
       'Veuillez saisir un numéro valide avec son indicatif pays.';
 
     return;
+
   }
 
 
-  btn.disabled = true;
+  btn.disabled =
+    true;
 
   btn.textContent =
     'Génération du code...';
 
-  result.classList.remove('show');
+  result.classList.remove(
+    'show'
+  );
 
 
   try{
@@ -1148,7 +1802,9 @@ async function requestCode(){
       codeEl.textContent =
         data.code;
 
-      result.classList.add('show');
+      result.classList.add(
+        'show'
+      );
 
       statusEl.className =
         'status ok';
@@ -1182,7 +1838,8 @@ async function requestCode(){
 
   finally{
 
-    btn.disabled = false;
+    btn.disabled =
+      false;
 
     btn.textContent =
       'Obtenir le code de jumelage';
