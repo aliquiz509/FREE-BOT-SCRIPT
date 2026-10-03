@@ -1,288 +1,1196 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>ORION-MD — Pairing</title>
+
+<title>DUBED-MD — Jumelage WhatsApp</title>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;900&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+
 <style>
 :root{
-  --bg:#0a0d16;
-  --bg-2:#0f1424;
-  --panel:#131a2e;
-  --line:#232c47;
-  --star:#f2c879;
-  --star-2:#e2965a;
-  --text:#e8ecf7;
-  --muted:#8791ab;
-  --ok:#6fcf97;
-  --err:#eb6161;
+  --bg:#03060d;
+  --bg2:#07101d;
+  --panel:rgba(8,16,30,.78);
+  --cyan:#00eaff;
+  --blue:#008cff;
+  --text:#edfaff;
+  --muted:#8194ad;
+  --ok:#42f5a7;
+  --err:#ff5575;
 }
-*{box-sizing:border-box;}
-html,body{margin:0;padding:0;}
+
+*{
+  box-sizing:border-box;
+}
+
+html,
 body{
-  background:radial-gradient(ellipse at 50% -10%, #172041 0%, var(--bg) 55%);
-  color:var(--text);
-  font-family:'Space Grotesk', sans-serif;
+  margin:0;
+  padding:0;
+  min-height:100%;
+}
+
+body{
   min-height:100vh;
   display:flex;
   align-items:center;
   justify-content:center;
-  padding:32px 18px;
+  padding:30px 16px;
+
+  color:var(--text);
+  font-family:'Space Grotesk',sans-serif;
+
+  background:
+    radial-gradient(circle at 50% -10%,rgba(0,234,255,.13),transparent 35%),
+    radial-gradient(circle at 10% 90%,rgba(39,108,255,.12),transparent 35%),
+    radial-gradient(circle at 90% 60%,rgba(0,234,255,.07),transparent 30%),
+    linear-gradient(135deg,#02050b,#050b15 45%,#02050b);
+
   overflow-x:hidden;
 }
-.sky{
+
+/* =========================
+   ARRIÈRE-PLAN ANIMÉ
+========================= */
+
+.background{
   position:fixed;
   inset:0;
-  z-index:0;
+  overflow:hidden;
   pointer-events:none;
+  z-index:0;
 }
-.sky span{
+
+.grid{
+  position:absolute;
+  inset:-50%;
+  opacity:.15;
+
+  background-image:
+    linear-gradient(rgba(0,234,255,.08) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(0,234,255,.08) 1px,transparent 1px);
+
+  background-size:45px 45px;
+
+  transform:perspective(500px) rotateX(60deg);
+  animation:gridMove 18s linear infinite;
+}
+
+@keyframes gridMove{
+  from{
+    transform:perspective(500px) rotateX(60deg) translateY(0);
+  }
+
+  to{
+    transform:perspective(500px) rotateX(60deg) translateY(90px);
+  }
+}
+
+.orb{
+  position:absolute;
+  width:320px;
+  height:320px;
+  border-radius:50%;
+
+  background:
+    radial-gradient(
+      circle,
+      rgba(0,234,255,.12),
+      rgba(0,140,255,.04) 45%,
+      transparent 70%
+    );
+
+  filter:blur(8px);
+  animation:orbFloat 9s ease-in-out infinite;
+}
+
+.orb.one{
+  top:-120px;
+  left:-100px;
+}
+
+.orb.two{
+  right:-120px;
+  bottom:-100px;
+  animation-delay:-4s;
+}
+
+@keyframes orbFloat{
+  0%,100%{
+    transform:translate(0,0) scale(1);
+  }
+
+  50%{
+    transform:translate(35px,-25px) scale(1.12);
+  }
+}
+
+.stars{
+  position:absolute;
+  inset:0;
+}
+
+.star{
   position:absolute;
   width:2px;
   height:2px;
+
   background:#fff;
   border-radius:50%;
-  opacity:.5;
-  animation:twinkle 4s ease-in-out infinite;
+
+  box-shadow:
+    0 0 5px rgba(255,255,255,.8),
+    0 0 12px rgba(0,234,255,.5);
+
+  animation:starPulse 3s ease-in-out infinite;
 }
-@keyframes twinkle{
-  0%,100%{opacity:.15;}
-  50%{opacity:.85;}
+
+@keyframes starPulse{
+  0%,100%{
+    opacity:.15;
+    transform:scale(.7);
+  }
+
+  50%{
+    opacity:1;
+    transform:scale(1.5);
+  }
 }
+
+/* =========================
+   CARTE PRINCIPALE
+========================= */
+
 .card{
   position:relative;
-  z-index:1;
+  z-index:2;
+
   width:100%;
-  max-width:440px;
-  background:linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
-  border:1px solid var(--line);
-  border-radius:20px;
-  padding:38px 32px 30px;
-  box-shadow:0 30px 80px -30px rgba(0,0,0,.7);
+  max-width:450px;
+
+  padding:34px 30px 28px;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(12,27,46,.82),
+      rgba(3,10,20,.90)
+    );
+
+  border:1px solid rgba(0,234,255,.22);
+  border-radius:24px;
+
+  box-shadow:
+    0 30px 100px rgba(0,0,0,.65),
+    0 0 60px rgba(0,234,255,.06),
+    inset 0 1px 0 rgba(255,255,255,.04);
+
+  backdrop-filter:blur(18px);
+  -webkit-backdrop-filter:blur(18px);
+
+  overflow:hidden;
+
+  animation:
+    cardEnter .8s cubic-bezier(.2,.8,.2,1),
+    cardFloat 6s ease-in-out infinite;
 }
-.belt{
+
+@keyframes cardEnter{
+  from{
+    opacity:0;
+    transform:translateY(30px) scale(.96);
+  }
+
+  to{
+    opacity:1;
+    transform:translateY(0) scale(1);
+  }
+}
+
+@keyframes cardFloat{
+  0%,100%{
+    box-shadow:
+      0 30px 100px rgba(0,0,0,.65),
+      0 0 60px rgba(0,234,255,.05),
+      inset 0 1px 0 rgba(255,255,255,.04);
+  }
+
+  50%{
+    box-shadow:
+      0 35px 110px rgba(0,0,0,.7),
+      0 0 70px rgba(0,234,255,.12),
+      inset 0 1px 0 rgba(255,255,255,.05);
+  }
+}
+
+.card::before{
+  content:"";
+  position:absolute;
+  inset:0;
+
+  border-radius:24px;
+  padding:1px;
+
+  background:
+    linear-gradient(
+      120deg,
+      transparent,
+      rgba(0,234,255,.6),
+      transparent,
+      rgba(39,108,255,.5),
+      transparent
+    );
+
+  background-size:300% 300%;
+
+  animation:borderMove 7s linear infinite;
+
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+
+  -webkit-mask-composite:xor;
+  mask-composite:exclude;
+
+  pointer-events:none;
+}
+
+@keyframes borderMove{
+  0%{
+    background-position:0% 50%;
+  }
+
+  50%{
+    background-position:100% 50%;
+  }
+
+  100%{
+    background-position:0% 50%;
+  }
+}
+
+/* =========================
+   EN-TÊTE
+========================= */
+
+.logo-area{
+  text-align:center;
+  margin-bottom:26px;
+}
+
+.logo-ring{
+  width:76px;
+  height:76px;
+
+  margin:0 auto 18px;
+
   display:flex;
   align-items:center;
   justify-content:center;
-  gap:10px;
-  margin-bottom:18px;
-}
-.belt span{
-  width:6px;
-  height:6px;
+
   border-radius:50%;
-  background:var(--star);
-  box-shadow:0 0 10px var(--star);
+
+  border:1px solid rgba(0,234,255,.45);
+
+  background:
+    radial-gradient(
+      circle,
+      rgba(0,234,255,.16),
+      rgba(0,140,255,.04) 60%,
+      transparent
+    );
+
+  box-shadow:
+    0 0 25px rgba(0,234,255,.18),
+    inset 0 0 20px rgba(0,234,255,.08);
+
+  position:relative;
+
+  animation:ringPulse 3s ease-in-out infinite;
 }
-.belt .line{
-  width:36px;
-  height:1px;
-  background:linear-gradient(90deg, transparent, var(--star), transparent);
+
+.logo-ring::before,
+.logo-ring::after{
+  content:"";
+  position:absolute;
+  inset:-8px;
+
+  border:1px solid rgba(0,234,255,.12);
+  border-radius:50%;
+
+  animation:spin 8s linear infinite;
 }
+
+.logo-ring::after{
+  inset:-15px;
+  border-color:rgba(39,108,255,.08);
+  animation-direction:reverse;
+  animation-duration:12s;
+}
+
+@keyframes ringPulse{
+  0%,100%{
+    transform:scale(1);
+  }
+
+  50%{
+    transform:scale(1.04);
+  }
+}
+
+@keyframes spin{
+  to{
+    transform:rotate(360deg);
+  }
+}
+
+.logo-core{
+  font-family:'Orbitron',sans-serif;
+  font-weight:900;
+  font-size:19px;
+  color:var(--cyan);
+
+  text-shadow:
+    0 0 10px rgba(0,234,255,.8),
+    0 0 25px rgba(0,234,255,.4);
+}
+
 h1{
-  font-family:'Cinzel', serif;
-  font-size:26px;
-  letter-spacing:.14em;
-  text-align:center;
-  margin:0 0 4px;
-  background:linear-gradient(90deg, var(--star), var(--star-2));
+  margin:0;
+
+  font-family:'Orbitron',sans-serif;
+  font-size:28px;
+  font-weight:900;
+
+  letter-spacing:.18em;
+
+  background:
+    linear-gradient(
+      90deg,
+      #fff,
+      var(--cyan),
+      #fff,
+      var(--cyan)
+    );
+
+  background-size:250% auto;
+
   -webkit-background-clip:text;
   background-clip:text;
+
   color:transparent;
+
+  animation:titleShine 5s linear infinite;
 }
+
+@keyframes titleShine{
+  to{
+    background-position:250% center;
+  }
+}
+
 .tagline{
-  text-align:center;
+  margin:9px 0 0;
+
   color:var(--muted);
-  font-size:13px;
-  letter-spacing:.04em;
-  margin-bottom:30px;
+
+  font-size:12.5px;
+  letter-spacing:.07em;
 }
+
+/* =========================
+   ÉTAT DU SYSTÈME
+========================= */
+
+.system-line{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+
+  margin-bottom:25px;
+
+  color:#627891;
+  font-size:10px;
+
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+
+.system-dot{
+  width:6px;
+  height:6px;
+
+  border-radius:50%;
+
+  background:var(--ok);
+
+  box-shadow:
+    0 0 8px var(--ok),
+    0 0 16px rgba(66,245,167,.35);
+
+  animation:systemPulse 1.7s ease-in-out infinite;
+}
+
+@keyframes systemPulse{
+  0%,100%{
+    opacity:.45;
+    transform:scale(.8);
+  }
+
+  50%{
+    opacity:1;
+    transform:scale(1.2);
+  }
+}
+
+/* =========================
+   FORMULAIRE
+========================= */
+
 label{
   display:block;
-  font-size:12px;
-  color:var(--muted);
-  margin-bottom:8px;
-  letter-spacing:.05em;
+
+  margin-bottom:9px;
+
+  color:#7e91aa;
+
+  font-size:11px;
+  font-weight:600;
+
+  letter-spacing:.12em;
   text-transform:uppercase;
 }
-.input-row{
-  display:flex;
-  gap:10px;
+
+.input-wrapper{
+  position:relative;
 }
+
+.input-wrapper::before{
+  content:"";
+
+  position:absolute;
+  left:14px;
+  top:50%;
+
+  width:7px;
+  height:7px;
+
+  border-radius:50%;
+
+  background:var(--cyan);
+
+  box-shadow:0 0 10px var(--cyan);
+
+  transform:translateY(-50%);
+
+  opacity:.6;
+
+  pointer-events:none;
+}
+
 input[type="text"]{
-  flex:1;
-  background:var(--bg);
-  border:1px solid var(--line);
-  border-radius:12px;
-  padding:14px 16px;
-  color:var(--text);
-  font-family:'JetBrains Mono', monospace;
-  font-size:15px;
-  outline:none;
-  transition:border-color .2s;
-}
-input[type="text"]:focus{
-  border-color:var(--star);
-}
-button{
   width:100%;
-  margin-top:16px;
-  padding:14px 16px;
-  border:none;
-  border-radius:12px;
-  background:linear-gradient(90deg, var(--star), var(--star-2));
-  color:#1a1206;
-  font-family:'Space Grotesk', sans-serif;
-  font-weight:700;
-  font-size:15px;
-  letter-spacing:.03em;
+
+  background:
+    linear-gradient(
+      135deg,
+      rgba(0,234,255,.035),
+      rgba(0,0,0,.2)
+    );
+
+  border:1px solid rgba(0,234,255,.13);
+
+  border-radius:13px;
+
+  padding:15px 16px 15px 32px;
+
+  color:var(--text);
+
+  font-family:'JetBrains Mono',monospace;
+  font-size:14px;
+
+  outline:none;
+
+  transition:
+    border-color .25s,
+    box-shadow .25s,
+    transform .25s;
+}
+
+input[type="text"]::placeholder{
+  color:#4e6179;
+}
+
+input[type="text"]:focus{
+  border-color:rgba(0,234,255,.6);
+
+  box-shadow:
+    0 0 0 3px rgba(0,234,255,.07),
+    0 0 25px rgba(0,234,255,.08);
+
+  transform:translateY(-1px);
+}
+
+/* =========================
+   BOUTON
+========================= */
+
+button{
+  position:relative;
+
+  width:100%;
+
+  margin-top:15px;
+
+  padding:15px 16px;
+
+  border:1px solid rgba(0,234,255,.45);
+  border-radius:13px;
+
+  background:
+    linear-gradient(
+      100deg,
+      #00d9e9,
+      #008cff,
+      #00d9e9
+    );
+
+  background-size:200% auto;
+
+  color:#001017;
+
+  font-family:'Space Grotesk',sans-serif;
+  font-weight:800;
+  font-size:14px;
+
+  letter-spacing:.04em;
+
   cursor:pointer;
-  transition:transform .15s, opacity .15s;
+
+  overflow:hidden;
+
+  box-shadow:
+    0 10px 30px rgba(0,140,255,.16);
+
+  transition:
+    transform .2s,
+    box-shadow .2s,
+    opacity .2s;
+
+  animation:buttonGradient 4s linear infinite;
 }
-button:hover{transform:translateY(-1px);}
-button:disabled{opacity:.55;cursor:not-allowed;transform:none;}
+
+@keyframes buttonGradient{
+  to{
+    background-position:200% center;
+  }
+}
+
+button::before{
+  content:"";
+
+  position:absolute;
+  top:0;
+  left:-120%;
+
+  width:70%;
+  height:100%;
+
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      rgba(255,255,255,.35),
+      transparent
+    );
+
+  transform:skewX(-20deg);
+
+  animation:buttonShine 3.5s ease-in-out infinite;
+}
+
+@keyframes buttonShine{
+  0%,40%{
+    left:-120%;
+  }
+
+  70%,100%{
+    left:150%;
+  }
+}
+
+button:hover{
+  transform:translateY(-2px);
+
+  box-shadow:
+    0 14px 35px rgba(0,140,255,.28),
+    0 0 25px rgba(0,234,255,.1);
+}
+
+button:active{
+  transform:translateY(0);
+}
+
+button:disabled{
+  opacity:.55;
+  cursor:not-allowed;
+  transform:none;
+}
+
+/* =========================
+   CODE DE JUMELAGE
+========================= */
+
 .result{
-  margin-top:26px;
-  border-top:1px dashed var(--line);
-  padding-top:22px;
+  position:relative;
+
+  margin-top:25px;
+
+  padding:21px 16px 18px;
+
+  border:1px solid rgba(0,234,255,.14);
+  border-radius:16px;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(0,234,255,.045),
+      rgba(0,0,0,.12)
+    );
+
   text-align:center;
+
   display:none;
+
+  overflow:hidden;
 }
-.result.show{display:block;}
+
+.result::before{
+  content:"";
+
+  position:absolute;
+
+  width:160px;
+  height:160px;
+
+  top:-100px;
+  left:50%;
+
+  transform:translateX(-50%);
+
+  background:rgba(0,234,255,.08);
+
+  filter:blur(35px);
+}
+
+.result.show{
+  display:block;
+  animation:resultEnter .55s cubic-bezier(.2,.8,.2,1);
+}
+
+@keyframes resultEnter{
+  from{
+    opacity:0;
+    transform:translateY(15px) scale(.96);
+  }
+
+  to{
+    opacity:1;
+    transform:translateY(0) scale(1);
+  }
+}
+
 .result .label{
-  color:var(--muted);
-  font-size:12px;
-  letter-spacing:.08em;
+  position:relative;
+
+  color:#6d839d;
+
+  font-size:10px;
+  font-weight:700;
+
+  letter-spacing:.16em;
   text-transform:uppercase;
+
   margin-bottom:10px;
 }
+
 .code{
-  font-family:'JetBrains Mono', monospace;
-  font-size:34px;
+  position:relative;
+
+  font-family:'JetBrains Mono',monospace;
+
+  font-size:32px;
   font-weight:700;
-  letter-spacing:.12em;
-  color:var(--star);
-  word-break:break-all;
+
+  letter-spacing:.14em;
+
+  color:var(--cyan);
+
+  text-shadow:
+    0 0 8px rgba(0,234,255,.55),
+    0 0 25px rgba(0,234,255,.22);
+
+  animation:codeGlow 2s ease-in-out infinite;
 }
+
+@keyframes codeGlow{
+  0%,100%{
+    text-shadow:
+      0 0 8px rgba(0,234,255,.45),
+      0 0 20px rgba(0,234,255,.15);
+  }
+
+  50%{
+    text-shadow:
+      0 0 12px rgba(0,234,255,.8),
+      0 0 35px rgba(0,234,255,.3);
+  }
+}
+
+/* =========================
+   MESSAGES
+========================= */
+
 .status{
+  min-height:19px;
+
   margin-top:14px;
-  font-size:13px;
+
+  font-size:12px;
+
+  text-align:center;
+
   color:var(--muted);
+
+  transition:.25s;
 }
-.status.err{color:var(--err);}
-.status.ok{color:var(--ok);}
+
+.status.err{
+  color:var(--err);
+
+  text-shadow:0 0 12px rgba(255,85,117,.25);
+}
+
+.status.ok{
+  color:var(--ok);
+
+  text-shadow:0 0 12px rgba(66,245,167,.2);
+}
+
+/* =========================
+   INSTRUCTIONS
+========================= */
+
 .steps{
+  position:relative;
+
   margin-top:22px;
-  font-size:12.5px;
-  color:var(--muted);
-  line-height:1.7;
+  padding:17px;
+
+  border:1px solid rgba(255,255,255,.045);
+  border-radius:13px;
+
+  background:rgba(255,255,255,.018);
+
+  color:#6f8199;
+
+  font-size:11.5px;
+  line-height:1.8;
 }
-.steps b{color:var(--text);}
+
+.steps::before{
+  content:"";
+
+  position:absolute;
+
+  left:0;
+  top:15px;
+  bottom:15px;
+
+  width:2px;
+
+  background:
+    linear-gradient(
+      transparent,
+      var(--cyan),
+      transparent
+    );
+
+  box-shadow:0 0 10px rgba(0,234,255,.3);
+}
+
+.steps b{
+  color:#b9d0df;
+}
+
+/* =========================
+   PIED DE PAGE
+========================= */
+
 footer{
   text-align:center;
-  margin-top:26px;
-  font-size:11.5px;
-  color:#4c5678;
-  letter-spacing:.05em;
+
+  margin-top:24px;
+
+  color:#3f526a;
+
+  font-family:'JetBrains Mono',monospace;
+
+  font-size:9.5px;
+
+  letter-spacing:.1em;
+
+  text-transform:uppercase;
 }
-footer a{color:#7c88ad;text-decoration:none;}
+
+footer span{
+  color:#536b85;
+}
+
+/* =========================
+   MOBILE
+========================= */
+
+@media(max-width:480px){
+
+  body{
+    padding:20px 12px;
+  }
+
+  .card{
+    padding:29px 20px 24px;
+    border-radius:21px;
+  }
+
+  h1{
+    font-size:24px;
+  }
+
+  .logo-ring{
+    width:68px;
+    height:68px;
+  }
+
+  .code{
+    font-size:28px;
+  }
+
+  .steps{
+    font-size:11px;
+  }
+}
+
+@media(prefers-reduced-motion:reduce){
+
+  *,
+  *::before,
+  *::after{
+    animation-duration:.01ms !important;
+    animation-iteration-count:1 !important;
+    scroll-behavior:auto !important;
+  }
+}
 </style>
 </head>
+
 <body>
 
-<div class="sky" id="sky"></div>
+<div class="background">
 
-<div class="card">
-  <div class="belt"><span></span><div class="line"></div><span></span><div class="line"></div><span></span></div>
-  <h1>ORION&#8209;MD</h1>
-  <p class="tagline">Pair your WhatsApp number to your bot</p>
+  <div class="grid"></div>
 
-  <label for="number">WhatsApp Number</label>
-  <div class="input-row">
-    <input type="text" id="number" placeholder="e.g. 15551234567 (country code, no + or spaces)" autocomplete="off" />
-  </div>
-  <button id="pairBtn" onclick="requestCode()">Get Pairing Code</button>
+  <div class="orb one"></div>
+  <div class="orb two"></div>
 
-  <div class="result" id="result">
-    <div class="label">Your Pairing Code</div>
-    <div class="code" id="code">— — — —</div>
-  </div>
+  <div class="stars" id="stars"></div>
 
-  <div class="status" id="status"></div>
-
-  <div class="steps">
-    1. Open WhatsApp &rarr; <b>Settings &rarr; Linked Devices</b><br/>
-    2. Tap <b>Link a Device &rarr; Link with phone number instead</b><br/>
-    3. Enter the code shown above before it expires
-  </div>
-
-  <footer>MADE IN BY INCONNU BOY SENSEI</footer>
 </div>
 
+
+<div class="card">
+
+  <div class="logo-area">
+
+    <div class="logo-ring">
+      <div class="logo-core">D</div>
+    </div>
+
+    <h1>DUBED-MD</h1>
+
+    <p class="tagline">
+      Système sécurisé de jumelage WhatsApp
+    </p>
+
+  </div>
+
+
+  <div class="system-line">
+    <span class="system-dot"></span>
+    SYSTÈME DUBED-MD EN LIGNE
+  </div>
+
+
+  <label for="number">
+    Numéro WhatsApp
+  </label>
+
+  <div class="input-wrapper">
+
+    <input
+      type="text"
+      id="number"
+      placeholder="Ex. : 15551234567"
+      autocomplete="off"
+    />
+
+  </div>
+
+
+  <button
+    id="pairBtn"
+    onclick="requestCode()"
+  >
+    Obtenir le code de jumelage
+  </button>
+
+
+  <div
+    class="result"
+    id="result"
+  >
+
+    <div class="label">
+      Votre code de jumelage
+    </div>
+
+    <div
+      class="code"
+      id="code"
+    >
+      — — — —
+    </div>
+
+  </div>
+
+
+  <div
+    class="status"
+    id="status"
+  ></div>
+
+
+  <div class="steps">
+
+    1. Ouvrez WhatsApp → <b>Paramètres → Appareils connectés</b><br/>
+
+    2. Appuyez sur <b>Connecter un appareil → Se connecter avec un numéro de téléphone</b><br/>
+
+    3. Saisissez le code affiché ci-dessus avant son expiration
+
+  </div>
+
+
+  <footer>
+    <span>DUBED-MD</span> • CRÉÉ POUR LA COMMUNAUTÉ
+  </footer>
+
+</div>
+
+
 <script>
-(function stars(){
-  const sky = document.getElementById('sky');
-  const count = 60;
-  for(let i=0;i<count;i++){
-    const s = document.createElement('span');
-    s.style.left = Math.random()*100+'vw';
-    s.style.top = Math.random()*100+'vh';
-    s.style.animationDelay = (Math.random()*4)+'s';
-    sky.appendChild(s);
+
+/* =========================
+   GÉNÉRATION DES ÉTOILES
+========================= */
+
+(function createStars(){
+
+  const container =
+    document.getElementById('stars');
+
+  const count = 90;
+
+  for(let i = 0; i < count; i++){
+
+    const star =
+      document.createElement('span');
+
+    star.className = 'star';
+
+    const size =
+      Math.random() > .9
+      ? 3
+      : Math.random() > .5
+      ? 2
+      : 1;
+
+    star.style.width =
+      size + 'px';
+
+    star.style.height =
+      size + 'px';
+
+    star.style.left =
+      Math.random() * 100 + 'vw';
+
+    star.style.top =
+      Math.random() * 100 + 'vh';
+
+    star.style.animationDelay =
+      Math.random() * 4 + 's';
+
+    star.style.animationDuration =
+      (2 + Math.random() * 4) + 's';
+
+    container.appendChild(star);
+
   }
+
 })();
 
-async function requestCode(){
-  const numberInput = document.getElementById('number');
-  const btn = document.getElementById('pairBtn');
-  const result = document.getElementById('result');
-  const codeEl = document.getElementById('code');
-  const statusEl = document.getElementById('status');
 
-  const number = numberInput.value.replace(/[^0-9]/g, '');
+/* =========================
+   FONCTION DE JUMELAGE
+   LOGIQUE CONSERVÉE
+========================= */
+
+async function requestCode(){
+
+  const numberInput =
+    document.getElementById('number');
+
+  const btn =
+    document.getElementById('pairBtn');
+
+  const result =
+    document.getElementById('result');
+
+  const codeEl =
+    document.getElementById('code');
+
+  const statusEl =
+    document.getElementById('status');
+
+
+  const number =
+    numberInput.value.replace(/[^0-9]/g, '');
+
+
   statusEl.className = 'status';
   statusEl.textContent = '';
 
+
   if(!number){
-    statusEl.className = 'status err';
-    statusEl.textContent = 'Enter a valid number with country code.';
+
+    statusEl.className =
+      'status err';
+
+    statusEl.textContent =
+      'Veuillez saisir un numéro valide avec son indicatif pays.';
+
     return;
   }
 
+
   btn.disabled = true;
-  btn.textContent = 'Requesting...';
+
+  btn.textContent =
+    'Génération du code...';
+
   result.classList.remove('show');
 
+
   try{
-    const res = await fetch('/code?number=' + encodeURIComponent(number));
-    const data = await res.json();
+
+    const res =
+      await fetch(
+        '/code?number=' +
+        encodeURIComponent(number)
+      );
+
+
+    const data =
+      await res.json();
+
 
     if(!res.ok){
-      statusEl.className = 'status err';
-      statusEl.textContent = data.message || data.error || 'Something went wrong. Try again.';
-    }else if(data.status === 'already_connected'){
-      statusEl.className = 'status ok';
-      statusEl.textContent = data.message;
-    }else if(data.code){
-      codeEl.textContent = data.code;
-      result.classList.add('show');
-      statusEl.className = 'status ok';
-      statusEl.textContent = 'Code generated. It expires shortly, act fast.';
-    }else{
-      statusEl.className = 'status err';
-      statusEl.textContent = 'No code returned. Try again in a moment.';
+
+      statusEl.className =
+        'status err';
+
+      statusEl.textContent =
+        data.message ||
+        data.error ||
+        'Une erreur est survenue. Veuillez réessayer.';
+
     }
-  }catch(err){
-    statusEl.className = 'status err';
-    statusEl.textContent = 'Could not reach the server. Try again.';
-  }finally{
-    btn.disabled = false;
-    btn.textContent = 'Get Pairing Code';
+
+    else if(
+      data.status ===
+      'already_connected'
+    ){
+
+      statusEl.className =
+        'status ok';
+
+      statusEl.textContent =
+        data.message;
+
+    }
+
+    else if(data.code){
+
+      codeEl.textContent =
+        data.code;
+
+      result.classList.add('show');
+
+      statusEl.className =
+        'status ok';
+
+      statusEl.textContent =
+        'Code généré. Il expire bientôt, utilisez-le rapidement.';
+
+    }
+
+    else{
+
+      statusEl.className =
+        'status err';
+
+      statusEl.textContent =
+        'Aucun code reçu. Veuillez réessayer dans quelques instants.';
+
+    }
+
   }
+
+  catch(err){
+
+    statusEl.className =
+      'status err';
+
+    statusEl.textContent =
+      'Impossible de contacter le serveur. Veuillez réessayer.';
+
+  }
+
+  finally{
+
+    btn.disabled = false;
+
+    btn.textContent =
+      'Obtenir le code de jumelage';
+
+  }
+
 }
+
 </script>
 
 </body>
