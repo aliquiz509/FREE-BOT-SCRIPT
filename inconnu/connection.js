@@ -29,8 +29,8 @@ const welcomePlugin = require('../inconnuboy/welcome');
 const cmd = require('./cmd');
 const Group = require('./group');
   const images = [
-    'https://files.catbox.moe/xo2whb.png',
-    'https://files.catbox.moe/xo2whb.png'
+    'https://i.postimg.cc/bwSPnhpk/file-000000003fa4722fa3b99bca86aba2a5.png',
+    'https://i.postimg.cc/bwSPnhpk/file-000000003fa4722fa3b99bca86aba2a5.png'
   ]; 
 
 Object.defineProperty(global, 'akira', {
@@ -69,7 +69,7 @@ const config = {
     PREFIX: '.',
     MAX_RETRIES: 3,
     ADMIN_LIST_PATH: './admin.json',
-    AKIRA_IMG: 'https://files.catbox.moe/xo2whb.png',
+    AKIRA_IMG: 'https://i.postimg.cc/bwSPnhpk/file-000000003fa4722fa3b99bca86aba2a5.png',
     NEWSLETTER_JID: process.env.NEWSLETTER_JID || '',
     NEWSLETTER_LIST: process.env.NEWSLETTER_JID ? [process.env.NEWSLETTER_JID] : [],
     NEWSLETTER_MESSAGE_ID: '428',
@@ -1109,7 +1109,7 @@ function getUptime() {
     return dDisplay + hDisplay + mDisplay + sDisplay;
 }
         
-const ARABIAN_THUMB_G = 'https://files.catbox.moe/xo2whb.png';
+const ARABIAN_THUMB_G = 'https://i.postimg.cc/bwSPnhpk/file-000000003fa4722fa3b99bca86aba2a5.png';
 const arabianCtxGlobal = {
   forwardingScore: 999,
   isForwarded: true,
@@ -2654,30 +2654,58 @@ case 'fancytext': {
                 case 'owner': {
     const ownerNum = '50935959059';
     const ownerName = '•!¡゜⃝𝙈𝙧•𝘼𝙡𝙚𝙭⍣⃝✨⍣🌴';
-    
-    await socket.sendMessage(sender, { react: { text: '🥷', key: msg.key } });
 
     await socket.sendMessage(sender, {
-        image: { url: akira }, 
+        react: {
+            text: '🥷',
+            key: msg.key
+        }
+    });
+
+    // Envoyer la fiche contact du propriétaire
+    await socket.sendMessage(sender, {
+        image: {
+            url: akira
+        },
         contacts: {
             displayName: ownerName,
-            contacts: [{
-                vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:${ownerName}\nORG: DUBED-MD;\nTEL;type=CELL;type=VOICE;waid=${ownerNum.slice(1)}:${ownerNum}\nEND:VCARD`
-            }]
+            contacts: [
+                {
+                    vcard: `BEGIN:VCARD
+VERSION:3.0
+FN:${ownerName}
+N:${ownerName};;;;
+ORG:DUBED-MD
+TEL;TYPE=CELL;TYPE=VOICE;waid=${ownerNum}:+${ownerNum}
+END:VCARD`
+                }
+            ]
         }
     });
 
-    await socket.sendMessage(sender, {
-        text: `*[•!¡゜⃝𝙈𝙧•𝘼𝙡𝙚𝙭⍣⃝✨⍣🌴]*\n\n₊❏ ⋮👤 Nom : ${ownerName}\n₊❏ ⋮ 📞 Numéro : ${ownerNum}\n\n> *DUBED-MD*`,
-        contextInfo: {
-            mentionedJid: [`${ownerNum.slice(1)}@s.whatsapp.net`]
+    // Envoyer les informations du propriétaire
+    await socket.sendMessage(
+        sender,
+        {
+            text: `*[•!¡゜⃝𝙈𝙧•𝘼𝙡𝙚𝙭⍣⃝✨⍣🌴]*
+
+₊❏ ⋮ 👤 Nom : ${ownerName}
+₊❏ ⋮ 📞 Numéro : +${ownerNum}
+
+> *DUBED-MD*`,
+            contextInfo: {
+                mentionedJid: [
+                    `${ownerNum}@s.whatsapp.net`
+                ]
+            }
+        },
+        {
+            quoted: msg
         }
-    }, {
-        quoted: msg
-    });
+    );
 
     break;
-                }
+}
 
 
 case 'lvcal': {
