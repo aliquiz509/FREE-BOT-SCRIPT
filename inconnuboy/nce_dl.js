@@ -81,7 +81,7 @@ function initOnceDL(socket) {
             let originalCaption = mediaMsg.caption || "";
             let finalCaption = `👁️ *ViewOnce Downloaded*\n\n`;
             if (originalCaption) finalCaption += `📝 *Caption:* ${originalCaption}\n\n`;
-            finalCaption += `> BY INCONNU BOY`;
+            finalCaption += `> BY MR ALEX`;
 
             await socket.sendMessage(myInbox, {
                 [msgType]: buffer,
