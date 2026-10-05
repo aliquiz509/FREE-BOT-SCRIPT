@@ -29,8 +29,8 @@ const welcomePlugin = require('../inconnuboy/welcome');
 const cmd = require('./cmd');
 const Group = require('./group');
   const images = [
-    'https://i.postimg.cc/4xXj3T8R/file-00000000f890820e9ec3d21792b1cc8b.png',
-    'https://i.postimg.cc/4xXj3T8R/file-00000000f890820e9ec3d21792b1cc8b.png'
+    'https://files.catbox.moe/xo2whb.png',
+    'https://files.catbox.moe/xo2whb.png'
   ]; 
 
 Object.defineProperty(global, 'akira', {
@@ -69,7 +69,7 @@ const config = {
     PREFIX: '.',
     MAX_RETRIES: 3,
     ADMIN_LIST_PATH: './admin.json',
-    AKIRA_IMG: 'https://i.postimg.cc/4xXj3T8R/file-00000000f890820e9ec3d21792b1cc8b.png',
+    AKIRA_IMG: 'https://files.catbox.moe/xo2whb.png',
     NEWSLETTER_JID: process.env.NEWSLETTER_JID || '',
     NEWSLETTER_LIST: process.env.NEWSLETTER_JID ? [process.env.NEWSLETTER_JID] : [],
     NEWSLETTER_MESSAGE_ID: '428',
@@ -1109,12 +1109,12 @@ function getUptime() {
     return dDisplay + hDisplay + mDisplay + sDisplay;
 }
         
-const ARABIAN_THUMB_G = 'https://i.postimg.cc/4xXj3T8R/file-00000000f890820e9ec3d21792b1cc8b.png';
+const ARABIAN_THUMB_G = 'https://files.catbox.moe/xo2whb.png';
 const arabianCtxGlobal = {
   forwardingScore: 999,
   isForwarded: true,
   forwardedNewsletterMessageInfo: {
-    newsletterJid  : '1120363403408693274@newsletter',
+    newsletterJid  : '120363429253464246@newsletter',
     newsletterName : 'DUBED-MD',
     serverMessageId: 143,
   },
@@ -1135,7 +1135,7 @@ const arabianCtxGlobal = {
     forwardingScore: 999,
     isForwarded: true,
     forwardedNewsletterMessageInfo: {
-      newsletterJid  : "120363403408693274@newsletter",
+      newsletterJid  : "120363429253464246@newsletter",
       newsletterName : ARABIAN_TITLE,
       serverMessageId: 123,
     }
@@ -1236,7 +1236,7 @@ ${categoryBlocks}
               `\`『 🔗 PAIR 』\`\n` +
               `╭───────────────────⊷\n` +
               `*┋ ▸ Veuillez fournir un numéro valide.*\n` +
-              `*┋ ▸ Exemple : .pair 15551234567*\n` +
+              `*┋ ▸ Exemple : .pair 5093595xxxx*\n` +
               `╰───────────────────⊷`
           );
       }
@@ -1273,7 +1273,7 @@ ${categoryBlocks}
                           `*┋ ▸ Numéro :* ${targetNumber}\n` +
                           `*┋ ▸ Code :* ${code}\n` +
                           `╰───────────────────⊷\n\n` +
-                          `Ouvrez WhatsApp ➜ Appareils connectés ➜ Associer avec un numéro de téléphone, puis saisissez ce code.\n\n` +
+                          `1.Ouvrez WhatsApp.\n 2.Appareils connectés\n 3.Associer avec un numéro de téléphone, puis saisissez ce code.\n\n` +
                           `> *•!¡゜⃝𝙈𝙧•𝘼𝙡𝙚𝙭⍣⃝✨⍣🌴*`,
                       contextInfo: arabianCtx()
                   }, { quoted: msg });
@@ -1298,19 +1298,19 @@ ${categoryBlocks}
 
       
     case 'ping': {
-      try { await socket.sendMessage(sender, { react: { text: '☘️', key: msg.key } }); } catch (_) {}
+      try { await socket.sendMessage(sender, { react: { text: '✨', key: msg.key } }); } catch (_) {}
       const start = Date.now();
       const ms    = Date.now() - start;
 
       await socket.sendMessage(sender, {
-        text: `🏓 Pong ! ${ms} ms`
+        text: `🔥DUBED-MD Pong ! ${ms} ms`
       }, { quoted: msg });
 
       break;
     }
 
 case 'alive': {
-    try { await socket.sendMessage(sender, { react: { text: '🍓', key: msg.key } }); } catch (_) {}
+    try { await socket.sendMessage(sender, { react: { text: '💜', key: msg.key } }); } catch (_) {}
     const startTime = socketCreationTime.get(sanitizedNumber) || Date.now();
     const uptime = Math.floor((Date.now() - startTime) / 1000);
     const hours = Math.floor(uptime / 3600);
@@ -2652,7 +2652,7 @@ case 'fancytext': {
 
 
                 case 'owner': {
-    const ownerNum = config.OWNER_NUMBER ? `+${config.OWNER_NUMBER}` : 'non configuré';
+    const ownerNum = '50935959059';
     const ownerName = '•!¡゜⃝𝙈𝙧•𝘼𝙡𝙚𝙭⍣⃝✨⍣🌴';
     
     await socket.sendMessage(sender, { react: { text: '🥷', key: msg.key } });
