@@ -4,155 +4,305 @@ const {
     jidNormalizedUser
 } = require('baileys');
 
+/*
+ * ============================================================
+ * GLOBAL STATE
+ * ============================================================
+ */
+
 if (!global.onceDlListeners) {
     global.onceDlListeners = new Map();
 }
 
-/*
- * Cache global des View Once récemment reçus.
- *
- * Pourquoi ?
- * Une réaction WhatsApp contient normalement la clé du message ciblé,
- * mais pas nécessairement le contenu complet du View Once.
- *
- * On mémorise donc les View Once reçus afin de pouvoir retrouver
- * leur contenu lorsque Baileys reçoit reactionMessage.
- */
-if (!global.onceDlCache) {
-    global.onceDlCache = new Map();
+if (!global.onceDlMessageCache) {
+    global.onceDlMessageCache = new Map();
 }
+
+if (!global.onceDlDownloaded) {
+    global.onceDlDownloaded = new Map();
+}
+
+
+/*
+ * ============================================================
+ * CONFIGURATION
+ * ============================================================
+ */
+
+const MAX_CACHE_SIZE = 3000;
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const DOWNLOAD_RETRIES = 3;
+const RETRY_DELAY = 1500;
+
+
+/*
+ * ============================================================
+ * UTILITY — SLEEP
+ * ============================================================
+ */
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-/**
- * Construit une clé suffisamment précise pour identifier un message.
+
+/*
+ * ============================================================
+ * UTILITY — MESSAGE CACHE KEY
+ * ============================================================
  */
-function getMessageKey(key = {}) {
-    if (!key) return '';
+
+function getMessageKey(key) {
+    if (!key) return null;
 
     const remoteJid = key.remoteJid || '';
     const id = key.id || '';
-    const participant = key.participant || '';
-    const fromMe = key.fromMe ? '1' : '0';
 
-    return `${remoteJid}|${id}|${participant}|${fromMe}`;
+    if (!remoteJid || !id) return null;
+
+    return `${remoteJid}:${id}`;
 }
 
-/**
- * Certaines versions/structures peuvent encapsuler le message
- * dans ephemeralMessage ou autres wrappers.
- *
- * Cette fonction descend dans les wrappers connus.
+
+/*
+ * ============================================================
+ * CACHE MESSAGE
+ * ============================================================
  */
-function unwrapMessage(message) {
-    if (!message || typeof message !== 'object') {
+
+function cacheMessage(msg) {
+    try {
+        if (!msg?.key?.id || !msg?.key?.remoteJid) {
+            return;
+        }
+
+        const cacheKey = getMessageKey(msg.key);
+
+        if (!cacheKey) return;
+
+        global.onceDlMessageCache.set(cacheKey, {
+            message: msg,
+            timestamp: Date.now()
+        });
+
+        /*
+         * Limiter la taille du cache.
+         */
+
+        if (global.onceDlMessageCache.size > MAX_CACHE_SIZE) {
+            const firstKey =
+                global.onceDlMessageCache.keys().next().value;
+
+            if (firstKey) {
+                global.onceDlMessageCache.delete(firstKey);
+            }
+        }
+
+    } catch (error) {
+        console.error(
+            '[OnceDL] Cache error:',
+            error?.message || error
+        );
+    }
+}
+
+
+/*
+ * ============================================================
+ * CLEAN OLD CACHE ENTRIES
+ * ============================================================
+ */
+
+function cleanMessageCache() {
+    try {
+        const now = Date.now();
+
+        for (const [key, value] of global.onceDlMessageCache.entries()) {
+            if (!value?.timestamp) {
+                global.onceDlMessageCache.delete(key);
+                continue;
+            }
+
+            if (now - value.timestamp > CACHE_TTL) {
+                global.onceDlMessageCache.delete(key);
+            }
+        }
+
+    } catch (error) {
+        console.error(
+            '[OnceDL] Cache cleanup error:',
+            error?.message || error
+        );
+    }
+}
+
+
+/*
+ * ============================================================
+ * FIND MESSAGE IN CACHE / EXISTING STORE
+ * ============================================================
+ */
+
+function findOriginalMessage(socket, key) {
+    try {
+        if (!key) return null;
+
+        const cacheKey = getMessageKey(key);
+
+        if (!cacheKey) return null;
+
+
+        /*
+         * --------------------------------------------------------
+         * 1. Notre propre cache
+         * --------------------------------------------------------
+         */
+
+        const cached = global.onceDlMessageCache.get(cacheKey);
+
+        if (cached?.message) {
+            return cached.message;
+        }
+
+
+        /*
+         * --------------------------------------------------------
+         * 2. socket.store
+         * --------------------------------------------------------
+         */
+
+        try {
+            const socketStore = socket?.store;
+
+            if (socketStore?.messages?.get) {
+                const chatMessages =
+                    socketStore.messages.get(key.remoteJid);
+
+                if (chatMessages?.get) {
+                    const found = chatMessages.get(key.id);
+
+                    if (found) {
+                        return found;
+                    }
+                }
+            }
+        } catch (e) {}
+
+
+        /*
+         * --------------------------------------------------------
+         * 3. global.store
+         * --------------------------------------------------------
+         */
+
+        try {
+            const globalStore = global.store;
+
+            if (globalStore?.messages?.get) {
+                const chatMessages =
+                    globalStore.messages.get(key.remoteJid);
+
+                if (chatMessages?.get) {
+                    const found = chatMessages.get(key.id);
+
+                    if (found) {
+                        return found;
+                    }
+                }
+            }
+        } catch (e) {}
+
+
+        return null;
+
+    } catch (error) {
+        console.error(
+            '[OnceDL] Message lookup error:',
+            error?.message || error
+        );
+
         return null;
     }
+}
+
+
+/*
+ * ============================================================
+ * UNWRAP VIEW ONCE MESSAGE
+ * ============================================================
+ */
+
+function unwrapViewOnce(message) {
+    if (!message) return null;
 
     let current = message;
 
-    for (let i = 0; i < 10; i++) {
-        if (!current || typeof current !== 'object') break;
+    /*
+     * Support multiple ViewOnce wrappers.
+     */
 
-        if (current.ephemeralMessage?.message) {
-            current = current.ephemeralMessage.message;
-            continue;
-        }
+    if (current.viewOnceMessage?.message) {
+        current = current.viewOnceMessage.message;
+    }
 
-        if (current.viewOnceMessage?.message) {
-            return current;
-        }
+    if (current.viewOnceMessageV2?.message) {
+        current = current.viewOnceMessageV2.message;
+    }
 
-        if (current.viewOnceMessageV2?.message) {
-            return current;
-        }
-
-        if (current.viewOnceMessageV2Extension?.message) {
-            return current;
-        }
-
-        break;
+    if (current.viewOnceMessageV2Extension?.message) {
+        current = current.viewOnceMessageV2Extension.message;
     }
 
     return current;
 }
 
-/**
- * Vérifie si un objet message contient réellement un View Once.
+
+/*
+ * ============================================================
+ * GET VIEW ONCE MEDIA
+ * ============================================================
  */
-function getViewOnceContainer(message) {
-    if (!message || typeof message !== 'object') {
+
+function getViewOnceMedia(message) {
+    if (!message) return null;
+
+    const original = message;
+
+    /*
+     * Vérification ViewOnce.
+     */
+
+    const isViewOnce =
+        original.viewOnceMessage ||
+        original.viewOnceMessageV2 ||
+        original.viewOnceMessageV2Extension ||
+        original.imageMessage?.viewOnce ||
+        original.videoMessage?.viewOnce ||
+        original.audioMessage?.viewOnce;
+
+    if (!isViewOnce) {
         return null;
-    }
-
-    if (message.viewOnceMessage?.message) {
-        return {
-            wrapper: 'viewOnceMessage',
-            message: message.viewOnceMessage.message
-        };
-    }
-
-    if (message.viewOnceMessageV2?.message) {
-        return {
-            wrapper: 'viewOnceMessageV2',
-            message: message.viewOnceMessageV2.message
-        };
-    }
-
-    if (message.viewOnceMessageV2Extension?.message) {
-        return {
-            wrapper: 'viewOnceMessageV2Extension',
-            message: message.viewOnceMessageV2Extension.message
-        };
     }
 
     /*
-     * Compatibilité avec les structures où le flag viewOnce
-     * est directement présent sur image/video/audio.
+     * Déballer le ViewOnce.
      */
-    if (message.imageMessage?.viewOnce) {
-        return {
-            wrapper: 'imageMessage',
-            message
-        };
-    }
 
-    if (message.videoMessage?.viewOnce) {
-        return {
-            wrapper: 'videoMessage',
-            message
-        };
-    }
-
-    if (message.audioMessage?.viewOnce) {
-        return {
-            wrapper: 'audioMessage',
-            message
-        };
-    }
-
-    return null;
-}
-
-/**
- * Retourne le vrai mediaMessage d'un View Once.
- */
-function extractViewOnceMedia(message) {
-    const container = getViewOnceContainer(message);
-
-    if (!container) {
-        return null;
-    }
-
-    const actualMessage = container.message;
+    const actualMessage = unwrapViewOnce(original);
 
     if (!actualMessage) {
         return null;
     }
 
+    /*
+     * Identifier le média.
+     */
+
     const type = getContentType(actualMessage);
+
+    if (!type) {
+        return null;
+    }
 
     if (
         type !== 'imageMessage' &&
@@ -171,155 +321,43 @@ function extractViewOnceMedia(message) {
     return {
         type,
         mediaMsg,
-        message: actualMessage,
-        wrapper: container.wrapper
+        actualMessage
     };
 }
 
-/**
- * Recherche récursive de contextInfo.
- *
- * Important :
- * Une réponse peut être :
- * - texte
- * - emoji
- * - image
- * - vidéo
- * - audio
- * - sticker
- * - document
- * - etc.
- *
- * Il ne faut donc surtout pas limiter la détection à
- * extendedTextMessage.
+
+/*
+ * ============================================================
+ * DOWNLOAD MEDIA WITH RETRIES
+ * ============================================================
  */
-function findContextInfo(message, depth = 0) {
-    if (!message || typeof message !== 'object' || depth > 10) {
-        return null;
-    }
 
-    if (message.contextInfo) {
-        return message.contextInfo;
-    }
-
-    for (const [key, value] of Object.entries(message)) {
-        if (!value || typeof value !== 'object') {
-            continue;
-        }
-
-        /*
-         * Évite de parcourir inutilement des structures gigantesques.
-         */
-        if (
-            key === 'messageContextInfo' ||
-            key === 'senderKeyDistributionMessage'
-        ) {
-            continue;
-        }
-
-        const found = findContextInfo(value, depth + 1);
-
-        if (found) {
-            return found;
-        }
-    }
-
-    return null;
-}
-
-/**
- * Récupère le quotedMessage depuis n'importe quelle structure
- * supportant contextInfo.
- */
-function getQuotedMessage(message) {
-    const contextInfo = findContextInfo(message);
-
-    if (!contextInfo?.quotedMessage) {
-        return null;
-    }
-
-    return {
-        contextInfo,
-        quotedMessage: contextInfo.quotedMessage
-    };
-}
-
-/**
- * Détermine si un message est une réaction.
- */
-function getReactionData(message) {
-    if (!message || typeof message !== 'object') {
-        return null;
-    }
-
-    const reaction = message.reactionMessage;
-
-    if (!reaction) {
-        return null;
-    }
-
-    /*
-     * Une réaction supprimée possède généralement une valeur vide.
-     * Elle ne doit pas déclencher un nouveau téléchargement.
-     */
-    const reactionText = reaction.text;
-
-    if (!reactionText) {
-        return null;
-    }
-
-    /*
-     * La clé cible du message réagi.
-     */
-    const targetKey = reaction.key;
-
-    if (!targetKey?.id) {
-        return null;
-    }
-
-    return {
-        emoji: reactionText,
-        targetKey
-    };
-}
-
-/**
- * Détermine le type de média à envoyer.
- */
-function getSendType(type) {
-    if (type === 'imageMessage') return 'image';
-    if (type === 'videoMessage') return 'video';
-    if (type === 'audioMessage') return 'audio';
-    return null;
-}
-
-/**
- * Télécharge un View Once avec plusieurs tentatives.
- */
-async function downloadViewOnce(mediaMsg, type) {
-    const downloadType = type.replace('Message', '');
+async function downloadMedia(mediaMsg, type) {
+    const mediaType = type.replace('Message', '');
 
     let lastError = null;
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= DOWNLOAD_RETRIES; attempt++) {
         try {
+            console.log(
+                `[OnceDL] Download attempt ${attempt}/${DOWNLOAD_RETRIES}`
+            );
+
             const stream = await downloadContentFromMessage(
                 mediaMsg,
-                downloadType
+                mediaType
             );
 
             const chunks = [];
 
             for await (const chunk of stream) {
-                if (chunk) {
-                    chunks.push(Buffer.from(chunk));
-                }
+                chunks.push(chunk);
             }
 
             const buffer = Buffer.concat(chunks);
 
-            if (!buffer.length) {
-                throw new Error('Downloaded ViewOnce media is empty');
+            if (!buffer || buffer.length === 0) {
+                throw new Error('Downloaded buffer is empty');
             }
 
             return buffer;
@@ -327,8 +365,13 @@ async function downloadViewOnce(mediaMsg, type) {
         } catch (error) {
             lastError = error;
 
-            if (attempt < 3) {
-                await sleep(1500);
+            console.error(
+                `[OnceDL] Attempt ${attempt} failed:`,
+                error?.message || error
+            );
+
+            if (attempt < DOWNLOAD_RETRIES) {
+                await sleep(RETRY_DELAY);
             }
         }
     }
@@ -336,505 +379,693 @@ async function downloadViewOnce(mediaMsg, type) {
     throw lastError || new Error('ViewOnce download failed');
 }
 
-/**
- * Déduplication temporaire.
- *
- * La clé contient :
- * session + trigger + message ciblé.
- *
- * Ainsi :
- * réaction + reply restent deux actions différentes.
- *
- * Une réaction de l'utilisateur A ne bloque pas un reply légitime
- * d'un autre utilisateur.
+
+/*
+ * ============================================================
+ * REACTION TARGET KEY
+ * ============================================================
  */
-function buildDedupKey(sessionJid, trigger, messageKey) {
-    return `${sessionJid}|${trigger}|${messageKey}`;
-}
 
-function hasProcessed(key) {
-    return global.onceDlCache.processed?.has(key);
-}
+function getReactionTargetKey(msg) {
+    try {
+        const reaction =
+            msg?.message?.reactionMessage;
 
-function markProcessed(key) {
-    if (!global.onceDlCache.processed) {
-        global.onceDlCache.processed = new Map();
-    }
-
-    global.onceDlCache.processed.set(key, Date.now());
-
-    /*
-     * Nettoyage périodique des anciennes entrées.
-     * Évite une croissance infinie de la mémoire.
-     */
-    const expiration = 10 * 60 * 1000;
-    const now = Date.now();
-
-    for (const [oldKey, timestamp] of global.onceDlCache.processed.entries()) {
-        if (now - timestamp > expiration) {
-            global.onceDlCache.processed.delete(oldKey);
+        if (!reaction?.key) {
+            return null;
         }
-    }
-}
 
-/**
- * Met en cache un View Once reçu.
- */
-function cacheViewOnce(msg) {
-    if (!msg?.key?.id || !msg?.key?.remoteJid || !msg?.message) {
-        return;
-    }
+        return reaction.key;
 
-    const media = extractViewOnceMedia(msg.message);
-
-    if (!media) {
-        return;
-    }
-
-    const key = getMessageKey(msg.key);
-
-    if (!key) {
-        return;
-    }
-
-    global.onceDlCache.set(key, {
-        key: msg.key,
-        message: msg.message,
-        media,
-        createdAt: Date.now()
-    });
-
-    /*
-     * Nettoyage des View Once trop anciens.
-     * 30 minutes suffisent largement pour permettre une réaction/reply.
-     */
-    const expiration = 30 * 60 * 1000;
-    const now = Date.now();
-
-    for (const [cacheKey, item] of global.onceDlCache.entries()) {
-        if (
-            cacheKey !== 'processed' &&
-            item?.createdAt &&
-            now - item.createdAt > expiration
-        ) {
-            global.onceDlCache.delete(cacheKey);
-        }
-    }
-}
-
-/**
- * Recherche un View Once à partir de la clé d'une réaction.
- *
- * On essaie plusieurs représentations car participant/fromMe
- * peuvent différer selon le contexte du groupe ou du chat privé.
- */
-function findCachedViewOnce(targetKey) {
-    if (!targetKey?.id) {
+    } catch (error) {
         return null;
     }
-
-    const exactKey = getMessageKey(targetKey);
-    const exact = global.onceDlCache.get(exactKey);
-
-    if (exact) {
-        return exact;
-    }
-
-    /*
-     * Fallback : même remoteJid + id.
-     */
-    for (const [cacheKey, item] of global.onceDlCache.entries()) {
-        if (cacheKey === 'processed') {
-            continue;
-        }
-
-        if (!item?.key) {
-            continue;
-        }
-
-        if (
-            item.key.id === targetKey.id &&
-            item.key.remoteJid === targetKey.remoteJid
-        ) {
-            return item;
-        }
-    }
-
-    return null;
 }
 
-/**
- * Télécharge et envoie le View Once dans l'inbox du bot.
+
+/*
+ * ============================================================
+ * CHECK REACTION
+ * ============================================================
  */
-async function processViewOnce({
-    socket,
-    sessionJid,
-    sourceJid,
-    reactionKey,
-    targetMessage,
-    trigger,
-    triggerMessageKey
-}) {
-    if (!targetMessage) {
-        return false;
-    }
 
-    const media = extractViewOnceMedia(targetMessage);
+function isReactionMessage(msg) {
+    return !!msg?.message?.reactionMessage;
+}
 
-    if (!media) {
-        return false;
-    }
 
-    const sendType = getSendType(media.type);
+/*
+ * ============================================================
+ * CHECK REPLY / QUOTED MESSAGE
+ * ============================================================
+ */
 
-    if (!sendType) {
-        return false;
-    }
-
-    /*
-     * La déduplication est faite sur le View Once ciblé.
-     */
-    const targetKey = reactionKey || triggerMessageKey;
-
-    const targetMessageKey = getMessageKey(targetKey);
-
-    if (!targetMessageKey) {
-        return false;
-    }
-
-    const dedupKey = buildDedupKey(
-        sessionJid,
-        trigger,
-        targetMessageKey
-    );
-
-    if (hasProcessed(dedupKey)) {
-        return false;
-    }
-
-    /*
-     * On marque avant le téléchargement afin d'éviter que deux
-     * événements identiques lancent simultanément deux téléchargements.
-     */
-    markProcessed(dedupKey);
-
-    let statusJid = sourceJid || targetKey?.remoteJid;
-
-    /*
-     * Réaction visuelle facultative conservée.
-     */
+function getQuotedMessage(msg) {
     try {
-        if (statusJid) {
-            await socket.sendMessage(statusJid, {
-                react: {
-                    text: '⏳',
-                    key: triggerMessageKey || targetKey
-                }
-            });
+        const messageType = getContentType(msg?.message);
+
+        if (!messageType) {
+            return null;
         }
-    } catch (_) {}
 
-    try {
-        const buffer = await downloadViewOnce(
-            media.mediaMsg,
-            media.type
+        const messageContent =
+            msg.message[messageType];
+
+        /*
+         * Reply classique avec extendedTextMessage.
+         */
+
+        if (messageType === 'extendedTextMessage') {
+            return (
+                messageContent?.contextInfo?.quotedMessage ||
+                null
+            );
+        }
+
+        /*
+         * Certains media peuvent également contenir
+         * contextInfo.
+         */
+
+        return (
+            messageContent?.contextInfo?.quotedMessage ||
+            null
         );
 
-        /*
-         * Comportement demandé :
-         * l'inbox du bot reste sessionJid.
-         */
-        const myInbox = sessionJid;
+    } catch (error) {
+        return null;
+    }
+}
 
-        let originalCaption = media.mediaMsg.caption || '';
 
-        let finalCaption = `👁️ *ViewOnce Downloaded*\n\n`;
+/*
+ * ============================================================
+ * DOWNLOAD VIEW ONCE
+ * ============================================================
+ */
 
-        if (originalCaption) {
-            finalCaption += `📝 *Caption:* ${originalCaption}\n\n`;
+async function processViewOnce({
+    socket,
+    triggerMessage,
+    targetMessage,
+    targetKey
+}) {
+    try {
+        if (!targetMessage) {
+            return false;
         }
 
-        finalCaption += `> BY INCONNU BOY`;
+        /*
+         * --------------------------------------------------------
+         * Vérifier si c'est bien un ViewOnce.
+         * --------------------------------------------------------
+         */
 
-        const payload = {
-            [sendType]: buffer,
-            caption: finalCaption
-        };
+        const mediaInfo =
+            getViewOnceMedia(targetMessage);
 
-        await socket.sendMessage(myInbox, payload);
+        if (!mediaInfo) {
+            return false;
+        }
+
+        const {
+            type,
+            mediaMsg
+        } = mediaInfo;
+
 
         /*
-         * Succès.
+         * --------------------------------------------------------
+         * ANTI-DUPLICATE
+         * --------------------------------------------------------
+         *
+         * Un même ViewOnce ne sera téléchargé qu'une seule fois
+         * par session.
          */
-        try {
-            if (statusJid) {
-                await socket.sendMessage(statusJid, {
-                    react: {
-                        text: '✅',
-                        key: triggerMessageKey || targetKey
-                    }
-                });
+
+        const uniqueKey =
+            getMessageKey(targetKey || targetMessage.key);
+
+        if (!uniqueKey) {
+            return false;
+        }
+
+        if (global.onceDlDownloaded.has(uniqueKey)) {
+            console.log(
+                `[OnceDL] Already downloaded: ${uniqueKey}`
+            );
+
+            return false;
+        }
+
+        /*
+         * Réserver immédiatement la clé.
+         *
+         * Cela évite qu'un reaction + reply simultané lance
+         * deux téléchargements en parallèle.
+         */
+
+        global.onceDlDownloaded.set(
+            uniqueKey,
+            {
+                timestamp: Date.now(),
+                status: 'processing'
             }
-        } catch (_) {}
+        );
+
+
+        /*
+         * --------------------------------------------------------
+         * Déterminer le type d'envoi.
+         * --------------------------------------------------------
+         */
+
+        const msgType =
+            type === 'imageMessage'
+                ? 'image'
+                : type === 'videoMessage'
+                    ? 'video'
+                    : 'audio';
+
+
+        /*
+         * --------------------------------------------------------
+         * Réaction ⏳
+         * --------------------------------------------------------
+         */
+
+        try {
+            if (triggerMessage?.key?.remoteJid) {
+                await socket.sendMessage(
+                    triggerMessage.key.remoteJid,
+                    {
+                        react: {
+                            text: '⏳',
+                            key: triggerMessage.key
+                        }
+                    }
+                );
+            }
+        } catch (error) {
+            /*
+             * Une erreur de réaction ne doit jamais
+             * empêcher le téléchargement.
+             */
+        }
+
+
+        /*
+         * --------------------------------------------------------
+         * DOWNLOAD
+         * --------------------------------------------------------
+         */
+
+        let buffer;
+
+        try {
+            buffer = await downloadMedia(
+                mediaMsg,
+                type
+            );
+        } catch (error) {
+            /*
+             * Supprimer la réservation afin qu'un prochain
+             * déclencheur puisse réessayer.
+             */
+
+            global.onceDlDownloaded.delete(uniqueKey);
+
+            try {
+                if (triggerMessage?.key?.remoteJid) {
+                    await socket.sendMessage(
+                        triggerMessage.key.remoteJid,
+                        {
+                            react: {
+                                text: '❌',
+                                key: triggerMessage.key
+                            }
+                        }
+                    );
+                }
+            } catch (e) {}
+
+            return false;
+        }
+
+
+        /*
+         * --------------------------------------------------------
+         * CAPTION
+         * --------------------------------------------------------
+         */
+
+        const originalCaption =
+            mediaMsg.caption || '';
+
+        let finalCaption =
+            `👁️ *ViewOnce Downloaded*\n\n`;
+
+        if (originalCaption) {
+            finalCaption +=
+                `📝 *Caption:* ${originalCaption}\n\n`;
+        }
+
+        finalCaption +=
+            `> BY MR ALEX`;
+
+
+        /*
+         * --------------------------------------------------------
+         * ENVOYER DANS L'INBOX DU BOT
+         * --------------------------------------------------------
+         */
+
+        const sessionJid =
+            jidNormalizedUser(socket.user.id);
+
+        await socket.sendMessage(
+            sessionJid,
+            {
+                [msgType]: buffer,
+                caption: finalCaption
+            }
+        );
+
+
+        /*
+         * --------------------------------------------------------
+         * MARQUER COMME TÉLÉCHARGÉ
+         * --------------------------------------------------------
+         */
+
+        global.onceDlDownloaded.set(
+            uniqueKey,
+            {
+                timestamp: Date.now(),
+                status: 'downloaded'
+            }
+        );
+
+
+        /*
+         * --------------------------------------------------------
+         * Réaction ✅
+         * --------------------------------------------------------
+         */
+
+        try {
+            if (triggerMessage?.key?.remoteJid) {
+                await socket.sendMessage(
+                    triggerMessage.key.remoteJid,
+                    {
+                        react: {
+                            text: '✅',
+                            key: triggerMessage.key
+                        }
+                    }
+                );
+            }
+        } catch (error) {}
+
+        console.log(
+            `[OnceDL] ViewOnce downloaded successfully: ${uniqueKey}`
+        );
 
         return true;
 
     } catch (error) {
         console.error(
-            '[OnceDL] Download failed:',
+            '[OnceDL] Process error:',
             error?.message || error
         );
-
-        /*
-         * Important :
-         * on ne laisse jamais une erreur de téléchargement
-         * casser le listener ou le socket.
-         */
-        try {
-            if (statusJid) {
-                await socket.sendMessage(statusJid, {
-                    react: {
-                        text: '❌',
-                        key: triggerMessageKey || targetKey
-                    }
-                });
-            }
-        } catch (_) {}
 
         return false;
     }
 }
+
+
+/*
+ * ============================================================
+ * CLEAN DOWNLOADED CACHE
+ * ============================================================
+ */
+
+function cleanDownloadedCache() {
+    try {
+        const now = Date.now();
+
+        /*
+         * Garder la protection anti-duplicate pendant 30 minutes.
+         */
+
+        for (
+            const [key, value]
+            of global.onceDlDownloaded.entries()
+        ) {
+            if (!value?.timestamp) {
+                global.onceDlDownloaded.delete(key);
+                continue;
+            }
+
+            if (now - value.timestamp > CACHE_TTL) {
+                global.onceDlDownloaded.delete(key);
+            }
+        }
+
+    } catch (error) {
+        console.error(
+            '[OnceDL] Downloaded cache cleanup error:',
+            error?.message || error
+        );
+    }
+}
+
+
+/*
+ * ============================================================
+ * INITIALIZE
+ * ============================================================
+ */
 
 function initOnceDL(socket) {
     if (!socket || !socket.user) {
         return;
     }
 
-    const sessionJid = jidNormalizedUser(socket.user.id);
-    const socketId = sessionJid.split('@')[0];
+    const sessionJid =
+        jidNormalizedUser(socket.user.id);
+
+    const socketId =
+        sessionJid.split('@')[0];
+
 
     /*
-     * Protection contre plusieurs listeners sur le même socket.
+     * Éviter les listeners dupliqués.
      */
-    const active = global.onceDlListeners.get(socketId);
+
+    const active =
+        global.onceDlListeners.get(socketId);
 
     if (active && active.socket === socket) {
+        console.log(
+            `[OnceDL] Listener already active for ${socketId}`
+        );
+
         return;
     }
 
+
     /*
-     * Si un ancien socket est enregistré sous le même compte,
-     * on tente de retirer son listener avant de remplacer l'entrée.
+     * ========================================================
+     * MAIN LISTENER
+     * ========================================================
      */
-    if (active?.socket && active.listener) {
-        try {
-            active.socket.ev.off(
-                'messages.upsert',
-                active.listener
-            );
-        } catch (_) {}
-    }
 
     const onceListener = async (chatUpdate) => {
         try {
-            const messages = chatUpdate?.messages;
+            const messages =
+                chatUpdate?.messages || [];
 
-            if (!Array.isArray(messages) || !messages.length) {
+            if (!messages.length) {
                 return;
             }
 
             /*
-             * messages.upsert peut contenir plusieurs messages.
-             * On les traite tous.
+             * Traiter tous les messages reçus.
              */
+
             for (const msg of messages) {
-                if (!msg || !msg.message || !msg.key) {
+                if (!msg?.message) {
                     continue;
                 }
 
-                /*
-                 * =====================================================
-                 * ÉTAPE 1 — CACHE DES VIEW ONCE
-                 * =====================================================
-                 *
-                 * On mémorise les View Once dès leur réception.
-                 *
-                 * Cela permet ensuite de résoudre :
-                 *
-                 * View Once
-                 *      ↓
-                 * ReactionMessage
-                 *      ↓
-                 * reaction.key
-                 *      ↓
-                 * cache
-                 *      ↓
-                 * téléchargement
-                 */
-                cacheViewOnce(msg);
 
                 /*
-                 * =====================================================
-                 * CAS 1 — RÉACTION
-                 * =====================================================
+                 * ------------------------------------------------
+                 * 1. METTRE LE MESSAGE DANS LE CACHE
+                 * ------------------------------------------------
+                 *
+                 * Très important pour les reactions :
+                 * une reaction ne contient généralement pas
+                 * le contenu du message original.
                  */
-                const reactionData = getReactionData(msg);
 
-                if (reactionData) {
-                    const targetKey = reactionData.targetKey;
+                cacheMessage(msg);
 
-                    /*
-                     * La réaction n'est PAS considérée comme View Once
-                     * par défaut.
-                     *
-                     * On cherche précisément le message ciblé.
-                     */
-                    const cachedTarget = findCachedViewOnce(targetKey);
 
-                    if (cachedTarget?.message) {
-                        await processViewOnce({
-                            socket,
-                            sessionJid,
-                            sourceJid: msg.key.remoteJid,
-                            reactionKey: targetKey,
-                            targetMessage: cachedTarget.message,
-                            trigger: 'reaction',
-                            triggerMessageKey: msg.key
-                        });
+                /*
+                 * ------------------------------------------------
+                 * 2. SI C'EST DIRECTEMENT UN VIEW ONCE
+                 * ------------------------------------------------
+                 *
+                 * On le met simplement dans le cache.
+                 * On ne le télécharge pas automatiquement.
+                 */
+
+                const directViewOnce =
+                    getViewOnceMedia(msg.message);
+
+                if (directViewOnce) {
+                    continue;
+                }
+
+
+                /*
+                 * ------------------------------------------------
+                 * 3. REACTION SUR UN VIEW ONCE
+                 * ------------------------------------------------
+                 */
+
+                if (isReactionMessage(msg)) {
+                    const targetKey =
+                        getReactionTargetKey(msg);
+
+                    if (!targetKey) {
+                        continue;
                     }
 
                     /*
-                     * Une réaction ne doit pas ensuite passer dans
-                     * la logique Reply.
+                     * Trouver le message original.
                      */
+
+                    const originalMessage =
+                        findOriginalMessage(
+                            socket,
+                            targetKey
+                        );
+
+                    if (!originalMessage) {
+                        console.log(
+                            '[OnceDL] Reaction detected, but original message is not available in cache/store.'
+                        );
+
+                        continue;
+                    }
+
+                    /*
+                     * Vérifier que le message ciblé est ViewOnce.
+                     */
+
+                    const mediaInfo =
+                        getViewOnceMedia(
+                            originalMessage.message
+                        );
+
+                    if (!mediaInfo) {
+                        continue;
+                    }
+
+                    /*
+                     * Télécharger.
+                     */
+
+                    await processViewOnce({
+                        socket,
+                        triggerMessage: msg,
+                        targetMessage: originalMessage.message,
+                        targetKey
+                    });
+
+                    continue;
+                }
+
+
+                /*
+                 * ------------------------------------------------
+                 * 4. REPLY SUR UN VIEW ONCE
+                 * ------------------------------------------------
+                 */
+
+                const quotedMessage =
+                    getQuotedMessage(msg);
+
+                if (!quotedMessage) {
                     continue;
                 }
 
                 /*
-                 * =====================================================
-                 * CAS 2 — REPLY / QUOTE
-                 * =====================================================
-                 *
-                 * IMPORTANT :
-                 * aucun contrôle sur le contenu du message.
-                 *
-                 * Donc :
-                 * "salut"
-                 * "ok"
-                 * "123"
-                 * "😂"
-                 * sticker
-                 * image
-                 * vidéo
-                 * audio
-                 * document
-                 *
-                 * peuvent tous déclencher le téléchargement si
-                 * contextInfo.quotedMessage est un vrai View Once.
+                 * Vérifier directement le quoted message.
                  */
-                const replyData = getQuotedMessage(msg.message);
 
-                if (!replyData?.quotedMessage) {
-                    continue;
-                }
+                const mediaInfo =
+                    getViewOnceMedia(
+                        quotedMessage
+                    );
 
-                const quotedMsg = replyData.quotedMessage;
-
-                /*
-                 * Vérification stricte :
-                 * le message cité doit réellement être un View Once.
-                 */
-                const quotedMedia = extractViewOnceMedia(quotedMsg);
-
-                if (!quotedMedia) {
+                if (!mediaInfo) {
                     continue;
                 }
 
                 /*
-                 * La clé du message cité peut être fournie par
-                 * stanzaId / participant / remoteJid.
+                 * Le quotedMessage n'a pas toujours sa propre
+                 * key complète dans ce contexte.
                  *
-                 * Pour le téléchargement, le quotedMessage lui-même
-                 * suffit.
+                 * On utilise donc la clé fournie par
+                 * contextInfo.quotedMessage.
                  */
-                const contextInfo = replyData.contextInfo;
 
-                const quotedKey = {
-                    remoteJid:
-                        msg.key.remoteJid ||
-                        contextInfo.remoteJid ||
-                        '',
-                    id:
-                        contextInfo.stanzaId ||
-                        '',
-                    participant:
-                        contextInfo.participant ||
-                        '',
-                    fromMe: false
-                };
+                const messageType =
+                    getContentType(msg.message);
 
-                /*
-                 * Si stanzaId est absent, on utilise une clé locale
-                 * basée sur le message déclencheur afin d'éviter un
-                 * crash. Le contenu reste néanmoins strictement vérifié
-                 * comme View Once.
-                 */
-                const effectiveKey = quotedKey.id
-                    ? quotedKey
-                    : {
-                        remoteJid: msg.key.remoteJid || '',
-                        id: `quoted:${msg.key.id}`,
-                        participant:
-                            contextInfo.participant || '',
-                        fromMe: false
-                    };
+                const messageContent =
+                    msg.message?.[messageType];
+
+                const contextInfo =
+                    messageContent?.contextInfo;
+
+                const quotedKey =
+                    contextInfo?.stanzaId
+                        ? {
+                            remoteJid:
+                                msg.key.remoteJid,
+                            id:
+                                contextInfo.stanzaId,
+                            participant:
+                                contextInfo.participant
+                          }
+                        : null;
+
 
                 await processViewOnce({
                     socket,
-                    sessionJid,
-                    sourceJid: msg.key.remoteJid,
-                    targetMessage: quotedMsg,
-                    trigger: 'reply',
-                    triggerMessageKey: effectiveKey
+                    triggerMessage: msg,
+                    targetMessage: quotedMessage,
+                    targetKey: quotedKey
                 });
             }
 
-        } catch (err) {
+        } catch (error) {
             console.error(
-                '[OnceDL] Listener Error:',
-                err?.message || err
+                '[OnceDL] Listener error:',
+                error?.message || error
             );
-
-            /*
-             * Une erreur d'un événement ne doit jamais tuer
-             * le listener ni le socket.
-             */
         }
     };
 
-    socket.ev.on('messages.upsert', onceListener);
 
-    global.onceDlListeners.set(socketId, {
-        socket,
-        listener: onceListener
-    });
+    /*
+     * ========================================================
+     * REGISTER LISTENER
+     * ========================================================
+     */
+
+    socket.ev.on(
+        'messages.upsert',
+        onceListener
+    );
+
+
+    global.onceDlListeners.set(
+        socketId,
+        {
+            socket,
+            listener: onceListener
+        }
+    );
+
+
+    /*
+     * ========================================================
+     * CLEANUP INTERVAL
+     * ========================================================
+     */
+
+    const cleanupInterval =
+        setInterval(() => {
+            cleanMessageCache();
+            cleanDownloadedCache();
+        }, 5 * 60 * 1000);
+
+
+    /*
+     * Éviter que le timer empêche Node.js de se fermer.
+     */
+
+    if (cleanupInterval.unref) {
+        cleanupInterval.unref();
+    }
+
 
     console.log(
         `👁️ ViewOnce Downloader AUTO-ACTIVATED for ${socketId}`
     );
+
+    console.log(
+        `↳ Reply: ENABLED`
+    );
+
+    console.log(
+        `↳ Reaction: ENABLED`
+    );
+
+    console.log(
+        `↳ Image: ENABLED`
+    );
+
+    console.log(
+        `↳ Video: ENABLED`
+    );
+
+    console.log(
+        `↳ Audio: ENABLED`
+    );
+
+    console.log(
+        `↳ Anti-Duplicate: ENABLED`
+    );
+
+    console.log(
+        `↳ Retry: ${DOWNLOAD_RETRIES} attempts`
+    );
 }
+
+
+/*
+ * ============================================================
+ * PLUGIN EXPORT
+ * ============================================================
+ */
 
 module.exports = {
     name: 'once_downloader',
+
     category: 'utility',
-    description: 'Download ViewOnce using reactions or replies',
-    commands: ['antivv'],
+
+    description:
+        'Automatically downloads ViewOnce image, video and audio when a user replies or reacts to it.',
+
+    commands: [
+        'oncedl'
+    ],
 
     init: initOnceDL,
 
-    handler: async ({ socket, reply }) => {
+    handler: async ({ reply }) => {
         await reply(
-            '✅ *ViewOnce Downloader is Active!*'
+            '✅ *ViewOnce Downloader is Active!*\n\n' +
+            '↳ Reply to any ViewOnce to download it.\n' +
+            '↳ React to any ViewOnce with any emoji to download it.\n' +
+            '↳ No specific emoji required.'
         );
     }
 };
