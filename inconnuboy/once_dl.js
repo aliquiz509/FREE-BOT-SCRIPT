@@ -25,7 +25,7 @@ if (!global.onceDlDownloaded) {
 
 /*
  * ============================================================
- * CONFIGURATION
+ * CONFIG
  * ============================================================
  */
 
@@ -37,7 +37,7 @@ const RETRY_DELAY = 1500;
 
 /*
  * ============================================================
- * UTILITY — SLEEP
+ * SLEEP
  * ============================================================
  */
 
@@ -48,7 +48,7 @@ function sleep(ms) {
 
 /*
  * ============================================================
- * UTILITY — MESSAGE CACHE KEY
+ * MESSAGE KEY
  * ============================================================
  */
 
@@ -58,7 +58,19 @@ function getMessageKey(key) {
     const remoteJid = key.remoteJid || '';
     const id = key.id || '';
 
-    if (!remoteJid || !id) return null;
+    if (!remoteJid || !id) {
+        return null;
+    }
+
+    /*
+     * We intentionally do NOT include participant here.
+     *
+     * For a message inside a group:
+     *
+     * remoteJid + message ID
+     *
+     * is enough to identify the target message.
+     */
 
     return `${remoteJid}:${id}`;
 }
@@ -66,36 +78,43 @@ function getMessageKey(key) {
 
 /*
  * ============================================================
- * CACHE MESSAGE
+ * CACHE INCOMING MESSAGE
  * ============================================================
  */
 
 function cacheMessage(msg) {
     try {
-        if (!msg?.key?.id || !msg?.key?.remoteJid) {
+        if (!msg?.key?.remoteJid || !msg?.key?.id) {
             return;
         }
 
-        const cacheKey = getMessageKey(msg.key);
+        const key = getMessageKey(msg.key);
 
-        if (!cacheKey) return;
+        if (!key) {
+            return;
+        }
 
-        global.onceDlMessageCache.set(cacheKey, {
+        global.onceDlMessageCache.set(key, {
             message: msg,
             timestamp: Date.now()
         });
 
         /*
-         * Limiter la taille du cache.
+         * Prevent unlimited memory growth.
          */
 
-        if (global.onceDlMessageCache.size > MAX_CACHE_SIZE) {
-            const firstKey =
+        while (
+            global.onceDlMessageCache.size >
+            MAX_CACHE_SIZE
+        ) {
+            const oldestKey =
                 global.onceDlMessageCache.keys().next().value;
 
-            if (firstKey) {
-                global.onceDlMessageCache.delete(firstKey);
+            if (!oldestKey) {
+                break;
             }
+
+            global.onceDlMessageCache.delete(oldestKey);
         }
 
     } catch (error) {
@@ -109,7 +128,7 @@ function cacheMessage(msg) {
 
 /*
  * ============================================================
- * CLEAN OLD CACHE ENTRIES
+ * CLEAN MESSAGE CACHE
  * ============================================================
  */
 
@@ -117,13 +136,14 @@ function cleanMessageCache() {
     try {
         const now = Date.now();
 
-        for (const [key, value] of global.onceDlMessageCache.entries()) {
-            if (!value?.timestamp) {
-                global.onceDlMessageCache.delete(key);
-                continue;
-            }
-
-            if (now - value.timestamp > CACHE_TTL) {
+        for (
+            const [key, entry]
+            of global.onceDlMessageCache.entries()
+        ) {
+            if (
+                !entry?.timestamp ||
+                now - entry.timestamp > CACHE_TTL
+            ) {
                 global.onceDlMessageCache.delete(key);
             }
         }
@@ -139,26 +159,70 @@ function cleanMessageCache() {
 
 /*
  * ============================================================
- * FIND MESSAGE IN CACHE / EXISTING STORE
+ * CLEAN DOWNLOAD CACHE
  * ============================================================
  */
 
-function findOriginalMessage(socket, key) {
+function cleanDownloadedCache() {
     try {
-        if (!key) return null;
+        const now = Date.now();
+
+        for (
+            const [key, entry]
+            of global.onceDlDownloaded.entries()
+        ) {
+            if (
+                !entry?.timestamp ||
+                now - entry.timestamp > CACHE_TTL
+            ) {
+                global.onceDlDownloaded.delete(key);
+            }
+        }
+
+    } catch (error) {
+        console.error(
+            '[OnceDL] Download cache cleanup error:',
+            error?.message || error
+        );
+    }
+}
+
+
+/*
+ * ============================================================
+ * FIND ORIGINAL MESSAGE
+ *
+ * Priority:
+ *
+ * 1. Local OnceDL cache
+ * 2. socket.store.loadMessage()
+ * 3. socket.store.messages
+ * 4. global.store.loadMessage()
+ * 5. global.store.messages
+ * ============================================================
+ */
+
+async function findOriginalMessage(socket, key) {
+    try {
+        if (!key) {
+            return null;
+        }
 
         const cacheKey = getMessageKey(key);
 
-        if (!cacheKey) return null;
+        if (!cacheKey) {
+            return null;
+        }
 
 
         /*
          * --------------------------------------------------------
-         * 1. Notre propre cache
+         * 1. OUR LOCAL CACHE
          * --------------------------------------------------------
          */
 
-        const cached = global.onceDlMessageCache.get(cacheKey);
+        const cached =
+            global.onceDlMessageCache.get(cacheKey);
 
         if (cached?.message) {
             return cached.message;
@@ -167,57 +231,119 @@ function findOriginalMessage(socket, key) {
 
         /*
          * --------------------------------------------------------
-         * 2. socket.store
+         * 2. socket.store.loadMessage()
          * --------------------------------------------------------
          */
 
         try {
-            const socketStore = socket?.store;
+            if (
+                socket?.store &&
+                typeof socket.store.loadMessage === 'function'
+            ) {
+                const loaded =
+                    await socket.store.loadMessage(
+                        key.remoteJid,
+                        key.id
+                    );
 
-            if (socketStore?.messages?.get) {
-                const chatMessages =
-                    socketStore.messages.get(key.remoteJid);
-
-                if (chatMessages?.get) {
-                    const found = chatMessages.get(key.id);
-
-                    if (found) {
-                        return found;
-                    }
+                if (loaded) {
+                    return loaded;
                 }
             }
-        } catch (e) {}
+        } catch (error) {
+            console.error(
+                '[OnceDL] socket.store.loadMessage failed:',
+                error?.message || error
+            );
+        }
 
 
         /*
          * --------------------------------------------------------
-         * 3. global.store
+         * 3. socket.store.messages
          * --------------------------------------------------------
          */
 
         try {
-            const globalStore = global.store;
+            const messages =
+                socket?.store?.messages;
 
-            if (globalStore?.messages?.get) {
-                const chatMessages =
-                    globalStore.messages.get(key.remoteJid);
+            if (messages?.get) {
+                const chat =
+                    messages.get(key.remoteJid);
 
-                if (chatMessages?.get) {
-                    const found = chatMessages.get(key.id);
+                if (chat?.get) {
+                    const found =
+                        chat.get(key.id);
 
                     if (found) {
                         return found;
                     }
                 }
             }
-        } catch (e) {}
+        } catch (error) {}
+
+
+        /*
+         * --------------------------------------------------------
+         * 4. global.store.loadMessage()
+         * --------------------------------------------------------
+         */
+
+        try {
+            if (
+                global.store &&
+                typeof global.store.loadMessage === 'function'
+            ) {
+                const loaded =
+                    await global.store.loadMessage(
+                        key.remoteJid,
+                        key.id
+                    );
+
+                if (loaded) {
+                    return loaded;
+                }
+            }
+        } catch (error) {
+            console.error(
+                '[OnceDL] global.store.loadMessage failed:',
+                error?.message || error
+            );
+        }
+
+
+        /*
+         * --------------------------------------------------------
+         * 5. global.store.messages
+         * --------------------------------------------------------
+         */
+
+        try {
+            const messages =
+                global.store?.messages;
+
+            if (messages?.get) {
+                const chat =
+                    messages.get(key.remoteJid);
+
+                if (chat?.get) {
+                    const found =
+                        chat.get(key.id);
+
+                    if (found) {
+                        return found;
+                    }
+                }
+            }
+        } catch (error) {}
 
 
         return null;
 
     } catch (error) {
         console.error(
-            '[OnceDL] Message lookup error:',
+            '[OnceDL] Find original message error:',
             error?.message || error
         );
 
@@ -228,29 +354,61 @@ function findOriginalMessage(socket, key) {
 
 /*
  * ============================================================
- * UNWRAP VIEW ONCE MESSAGE
+ * UNWRAP MESSAGE
+ *
+ * Supports:
+ *
+ * - ephemeralMessage
+ * - viewOnceMessage
+ * - viewOnceMessageV2
+ * - viewOnceMessageV2Extension
  * ============================================================
  */
 
-function unwrapViewOnce(message) {
-    if (!message) return null;
+function unwrapMessage(message) {
+    if (!message) {
+        return null;
+    }
 
     let current = message;
 
     /*
-     * Support multiple ViewOnce wrappers.
+     * Multiple wrappers can exist.
+     * Limit the loop to prevent malformed recursive objects.
      */
 
-    if (current.viewOnceMessage?.message) {
-        current = current.viewOnceMessage.message;
-    }
+    for (let i = 0; i < 6; i++) {
+        if (current?.ephemeralMessage?.message) {
+            current =
+                current.ephemeralMessage.message;
+            continue;
+        }
 
-    if (current.viewOnceMessageV2?.message) {
-        current = current.viewOnceMessageV2.message;
-    }
+        if (current?.viewOnceMessage?.message) {
+            current =
+                current.viewOnceMessage.message;
+            continue;
+        }
 
-    if (current.viewOnceMessageV2Extension?.message) {
-        current = current.viewOnceMessageV2Extension.message;
+        if (current?.viewOnceMessageV2?.message) {
+            current =
+                current.viewOnceMessageV2.message;
+            continue;
+        }
+
+        if (
+            current
+                ?.viewOnceMessageV2Extension
+                ?.message
+        ) {
+            current =
+                current
+                    .viewOnceMessageV2Extension
+                    .message;
+            continue;
+        }
+
+        break;
     }
 
     return current;
@@ -264,45 +422,60 @@ function unwrapViewOnce(message) {
  */
 
 function getViewOnceMedia(message) {
-    if (!message) return null;
-
-    const original = message;
+    if (!message) {
+        return null;
+    }
 
     /*
-     * Vérification ViewOnce.
+     * Check the original object for ViewOnce.
      */
 
     const isViewOnce =
-        original.viewOnceMessage ||
-        original.viewOnceMessageV2 ||
-        original.viewOnceMessageV2Extension ||
-        original.imageMessage?.viewOnce ||
-        original.videoMessage?.viewOnce ||
-        original.audioMessage?.viewOnce;
+        !!(
+            message.viewOnceMessage ||
+            message.viewOnceMessageV2 ||
+            message.viewOnceMessageV2Extension ||
+            message.imageMessage?.viewOnce ||
+            message.videoMessage?.viewOnce ||
+            message.audioMessage?.viewOnce
+        );
 
     if (!isViewOnce) {
         return null;
     }
 
+
     /*
-     * Déballer le ViewOnce.
+     * Unwrap wrappers.
      */
 
-    const actualMessage = unwrapViewOnce(original);
+    const actualMessage =
+        unwrapMessage(message);
 
     if (!actualMessage) {
         return null;
     }
 
+
     /*
-     * Identifier le média.
+     * Identify media type.
      */
 
-    const type = getContentType(actualMessage);
+    const type =
+        getContentType(actualMessage);
 
     if (!type) {
         return null;
     }
+
+
+    /*
+     * Only support:
+     *
+     * image
+     * video
+     * audio
+     */
 
     if (
         type !== 'imageMessage' &&
@@ -312,11 +485,14 @@ function getViewOnceMedia(message) {
         return null;
     }
 
-    const mediaMsg = actualMessage[type];
+
+    const mediaMsg =
+        actualMessage[type];
 
     if (!mediaMsg) {
         return null;
     }
+
 
     return {
         type,
@@ -328,37 +504,61 @@ function getViewOnceMedia(message) {
 
 /*
  * ============================================================
- * DOWNLOAD MEDIA WITH RETRIES
+ * DOWNLOAD WITH RETRY
  * ============================================================
  */
 
-async function downloadMedia(mediaMsg, type) {
-    const mediaType = type.replace('Message', '');
+async function downloadMedia(
+    mediaMsg,
+    messageType
+) {
+    const mediaType =
+        messageType.replace(
+            'Message',
+            ''
+        );
 
     let lastError = null;
 
-    for (let attempt = 1; attempt <= DOWNLOAD_RETRIES; attempt++) {
+    for (
+        let attempt = 1;
+        attempt <= DOWNLOAD_RETRIES;
+        attempt++
+    ) {
         try {
             console.log(
                 `[OnceDL] Download attempt ${attempt}/${DOWNLOAD_RETRIES}`
             );
 
-            const stream = await downloadContentFromMessage(
-                mediaMsg,
-                mediaType
-            );
+            const stream =
+                await downloadContentFromMessage(
+                    mediaMsg,
+                    mediaType
+                );
 
             const chunks = [];
 
-            for await (const chunk of stream) {
+            for await (
+                const chunk of stream
+            ) {
                 chunks.push(chunk);
             }
 
-            const buffer = Buffer.concat(chunks);
+            const buffer =
+                Buffer.concat(chunks);
 
-            if (!buffer || buffer.length === 0) {
-                throw new Error('Downloaded buffer is empty');
+            if (
+                !buffer ||
+                buffer.length === 0
+            ) {
+                throw new Error(
+                    'Downloaded media is empty'
+                );
             }
+
+            console.log(
+                `[OnceDL] Download successful: ${buffer.length} bytes`
+            );
 
             return buffer;
 
@@ -366,101 +566,46 @@ async function downloadMedia(mediaMsg, type) {
             lastError = error;
 
             console.error(
-                `[OnceDL] Attempt ${attempt} failed:`,
+                `[OnceDL] Attempt ${attempt}/${DOWNLOAD_RETRIES} failed:`,
                 error?.message || error
             );
 
-            if (attempt < DOWNLOAD_RETRIES) {
-                await sleep(RETRY_DELAY);
+            if (
+                attempt <
+                DOWNLOAD_RETRIES
+            ) {
+                await sleep(
+                    RETRY_DELAY
+                );
             }
         }
     }
 
-    throw lastError || new Error('ViewOnce download failed');
+    throw (
+        lastError ||
+        new Error(
+            'Unable to download ViewOnce media'
+        )
+    );
 }
 
 
 /*
  * ============================================================
- * REACTION TARGET KEY
+ * PROCESS VIEW ONCE
  * ============================================================
- */
-
-function getReactionTargetKey(msg) {
-    try {
-        const reaction =
-            msg?.message?.reactionMessage;
-
-        if (!reaction?.key) {
-            return null;
-        }
-
-        return reaction.key;
-
-    } catch (error) {
-        return null;
-    }
-}
-
-
-/*
- * ============================================================
- * CHECK REACTION
- * ============================================================
- */
-
-function isReactionMessage(msg) {
-    return !!msg?.message?.reactionMessage;
-}
-
-
-/*
- * ============================================================
- * CHECK REPLY / QUOTED MESSAGE
- * ============================================================
- */
-
-function getQuotedMessage(msg) {
-    try {
-        const messageType = getContentType(msg?.message);
-
-        if (!messageType) {
-            return null;
-        }
-
-        const messageContent =
-            msg.message[messageType];
-
-        /*
-         * Reply classique avec extendedTextMessage.
-         */
-
-        if (messageType === 'extendedTextMessage') {
-            return (
-                messageContent?.contextInfo?.quotedMessage ||
-                null
-            );
-        }
-
-        /*
-         * Certains media peuvent également contenir
-         * contextInfo.
-         */
-
-        return (
-            messageContent?.contextInfo?.quotedMessage ||
-            null
-        );
-
-    } catch (error) {
-        return null;
-    }
-}
-
-
-/*
- * ============================================================
- * DOWNLOAD VIEW ONCE
+ *
+ * IMPORTANT:
+ *
+ * There is NO automatic reaction here.
+ *
+ * The downloader never sends:
+ *
+ * ⏳
+ * ✅
+ * ❌
+ *
+ * to the user's message.
  * ============================================================
  */
 
@@ -475,14 +620,17 @@ async function processViewOnce({
             return false;
         }
 
+
         /*
          * --------------------------------------------------------
-         * Vérifier si c'est bien un ViewOnce.
+         * IDENTIFY VIEW ONCE MEDIA
          * --------------------------------------------------------
          */
 
         const mediaInfo =
-            getViewOnceMedia(targetMessage);
+            getViewOnceMedia(
+                targetMessage
+            );
 
         if (!mediaInfo) {
             return false;
@@ -496,33 +644,50 @@ async function processViewOnce({
 
         /*
          * --------------------------------------------------------
-         * ANTI-DUPLICATE
+         * UNIQUE MESSAGE KEY
          * --------------------------------------------------------
-         *
-         * Un même ViewOnce ne sera téléchargé qu'une seule fois
-         * par session.
          */
 
         const uniqueKey =
-            getMessageKey(targetKey || targetMessage.key);
+            getMessageKey(
+                targetKey ||
+                targetMessage.key
+            );
 
         if (!uniqueKey) {
-            return false;
-        }
-
-        if (global.onceDlDownloaded.has(uniqueKey)) {
             console.log(
-                `[OnceDL] Already downloaded: ${uniqueKey}`
+                '[OnceDL] Cannot determine target message key.'
             );
 
             return false;
         }
 
+
         /*
-         * Réserver immédiatement la clé.
+         * --------------------------------------------------------
+         * ANTI-DUPLICATE
+         * --------------------------------------------------------
+         */
+
+        const existing =
+            global.onceDlDownloaded.get(
+                uniqueKey
+            );
+
+        if (existing) {
+            console.log(
+                `[OnceDL] Already processed: ${uniqueKey}`
+            );
+
+            return false;
+        }
+
+
+        /*
+         * Reserve immediately.
          *
-         * Cela évite qu'un reaction + reply simultané lance
-         * deux téléchargements en parallèle.
+         * If the user reacts and replies almost at the same
+         * time, only the first event gets permission to download.
          */
 
         global.onceDlDownloaded.set(
@@ -536,46 +701,6 @@ async function processViewOnce({
 
         /*
          * --------------------------------------------------------
-         * Déterminer le type d'envoi.
-         * --------------------------------------------------------
-         */
-
-        const msgType =
-            type === 'imageMessage'
-                ? 'image'
-                : type === 'videoMessage'
-                    ? 'video'
-                    : 'audio';
-
-
-        /*
-         * --------------------------------------------------------
-         * Réaction ⏳
-         * --------------------------------------------------------
-         */
-
-        try {
-            if (triggerMessage?.key?.remoteJid) {
-                await socket.sendMessage(
-                    triggerMessage.key.remoteJid,
-                    {
-                        react: {
-                            text: '⏳',
-                            key: triggerMessage.key
-                        }
-                    }
-                );
-            }
-        } catch (error) {
-            /*
-             * Une erreur de réaction ne doit jamais
-             * empêcher le téléchargement.
-             */
-        }
-
-
-        /*
-         * --------------------------------------------------------
          * DOWNLOAD
          * --------------------------------------------------------
          */
@@ -583,31 +708,58 @@ async function processViewOnce({
         let buffer;
 
         try {
-            buffer = await downloadMedia(
-                mediaMsg,
-                type
-            );
+            buffer =
+                await downloadMedia(
+                    mediaMsg,
+                    type
+                );
+
         } catch (error) {
             /*
-             * Supprimer la réservation afin qu'un prochain
-             * déclencheur puisse réessayer.
+             * Allow a future reaction/reply to retry if
+             * the download genuinely failed.
              */
 
-            global.onceDlDownloaded.delete(uniqueKey);
+            global.onceDlDownloaded.delete(
+                uniqueKey
+            );
 
-            try {
-                if (triggerMessage?.key?.remoteJid) {
-                    await socket.sendMessage(
-                        triggerMessage.key.remoteJid,
-                        {
-                            react: {
-                                text: '❌',
-                                key: triggerMessage.key
-                            }
-                        }
-                    );
-                }
-            } catch (e) {}
+            console.error(
+                '[OnceDL] Final download failure:',
+                error?.message || error
+            );
+
+            return false;
+        }
+
+
+        /*
+         * --------------------------------------------------------
+         * DETERMINE OUTPUT TYPE
+         * --------------------------------------------------------
+         */
+
+        let outputType;
+
+        if (
+            type === 'imageMessage'
+        ) {
+            outputType = 'image';
+
+        } else if (
+            type === 'videoMessage'
+        ) {
+            outputType = 'video';
+
+        } else if (
+            type === 'audioMessage'
+        ) {
+            outputType = 'audio';
+
+        } else {
+            global.onceDlDownloaded.delete(
+                uniqueKey
+            );
 
             return false;
         }
@@ -622,39 +774,41 @@ async function processViewOnce({
         const originalCaption =
             mediaMsg.caption || '';
 
-        let finalCaption =
-            `👁️ *ViewOnce Downloaded*\n\n`;
+        let caption =
+            '👁️ *ViewOnce Downloaded*\n\n';
 
         if (originalCaption) {
-            finalCaption +=
+            caption +=
                 `📝 *Caption:* ${originalCaption}\n\n`;
         }
 
-        finalCaption +=
-            `> BY MR ALEX`;
+        caption +=
+            '> BY MR ALEX';
 
 
         /*
          * --------------------------------------------------------
-         * ENVOYER DANS L'INBOX DU BOT
+         * BOT INBOX
          * --------------------------------------------------------
          */
 
         const sessionJid =
-            jidNormalizedUser(socket.user.id);
+            jidNormalizedUser(
+                socket.user.id
+            );
 
         await socket.sendMessage(
             sessionJid,
             {
-                [msgType]: buffer,
-                caption: finalCaption
+                [outputType]: buffer,
+                caption
             }
         );
 
 
         /*
          * --------------------------------------------------------
-         * MARQUER COMME TÉLÉCHARGÉ
+         * MARK AS DOWNLOADED
          * --------------------------------------------------------
          */
 
@@ -667,35 +821,15 @@ async function processViewOnce({
         );
 
 
-        /*
-         * --------------------------------------------------------
-         * Réaction ✅
-         * --------------------------------------------------------
-         */
-
-        try {
-            if (triggerMessage?.key?.remoteJid) {
-                await socket.sendMessage(
-                    triggerMessage.key.remoteJid,
-                    {
-                        react: {
-                            text: '✅',
-                            key: triggerMessage.key
-                        }
-                    }
-                );
-            }
-        } catch (error) {}
-
         console.log(
-            `[OnceDL] ViewOnce downloaded successfully: ${uniqueKey}`
+            `[OnceDL] SUCCESS: ${uniqueKey}`
         );
 
         return true;
 
     } catch (error) {
         console.error(
-            '[OnceDL] Process error:',
+            '[OnceDL] processViewOnce error:',
             error?.message || error
         );
 
@@ -706,35 +840,274 @@ async function processViewOnce({
 
 /*
  * ============================================================
- * CLEAN DOWNLOADED CACHE
+ * GET QUOTED MESSAGE
  * ============================================================
  */
 
-function cleanDownloadedCache() {
+function getQuotedInfo(msg) {
     try {
-        const now = Date.now();
+        if (!msg?.message) {
+            return null;
+        }
+
+        const messageType =
+            getContentType(
+                msg.message
+            );
+
+        if (!messageType) {
+            return null;
+        }
+
+        const content =
+            msg.message[messageType];
+
+        const contextInfo =
+            content?.contextInfo;
+
+        if (!contextInfo?.quotedMessage) {
+            return null;
+        }
+
 
         /*
-         * Garder la protection anti-duplicate pendant 30 minutes.
+         * WhatsApp's stanzaId identifies the original message.
          */
 
-        for (
-            const [key, value]
-            of global.onceDlDownloaded.entries()
-        ) {
-            if (!value?.timestamp) {
-                global.onceDlDownloaded.delete(key);
-                continue;
-            }
+        const targetKey =
+            contextInfo.stanzaId
+                ? {
+                    remoteJid:
+                        msg.key.remoteJid,
 
-            if (now - value.timestamp > CACHE_TTL) {
-                global.onceDlDownloaded.delete(key);
-            }
+                    id:
+                        contextInfo.stanzaId,
+
+                    participant:
+                        contextInfo.participant
+                }
+                : null;
+
+
+        return {
+            quotedMessage:
+                contextInfo.quotedMessage,
+
+            targetKey
+        };
+
+    } catch (error) {
+        return null;
+    }
+}
+
+
+/*
+ * ============================================================
+ * REPLY HANDLER
+ * ============================================================
+ */
+
+async function handleReply(
+    socket,
+    msg
+) {
+    const quotedInfo =
+        getQuotedInfo(msg);
+
+    if (!quotedInfo) {
+        return;
+    }
+
+    const {
+        quotedMessage,
+        targetKey
+    } = quotedInfo;
+
+
+    /*
+     * No text validation.
+     *
+     * The user can reply with:
+     *
+     * "ok"
+     * "hello"
+     * "."
+     * "😂"
+     * "👍"
+     * anything.
+     */
+
+    const mediaInfo =
+        getViewOnceMedia(
+            quotedMessage
+        );
+
+    if (!mediaInfo) {
+        return;
+    }
+
+
+    await processViewOnce({
+        socket,
+        triggerMessage: msg,
+        targetMessage: quotedMessage,
+        targetKey
+    });
+}
+
+
+/*
+ * ============================================================
+ * REACTION HANDLER
+ * ============================================================
+ *
+ * Baileys provides this through:
+ *
+ * socket.ev.on('messages.reaction', ...)
+ *
+ * The event contains:
+ *
+ * {
+ *   key: targetMessageKey,
+ *   reaction: {
+ *      key: reactorMessageKey,
+ *      text: "😂"
+ *   }
+ * }
+ *
+ * ============================================================
+ */
+
+async function handleReaction(
+    socket,
+    reactionUpdate
+) {
+    try {
+        if (!reactionUpdate) {
+            return;
         }
+
+        const targetKey =
+            reactionUpdate.key;
+
+        const reaction =
+            reactionUpdate.reaction;
+
+
+        /*
+         * Invalid reaction event.
+         */
+
+        if (!targetKey || !reaction) {
+            return;
+        }
+
+
+        /*
+         * If reaction.text is empty,
+         * the user REMOVED the reaction.
+         *
+         * Do not download.
+         */
+
+        if (!reaction.text) {
+            return;
+        }
+
+
+        /*
+         * If the bot itself created the reaction,
+         * ignore it.
+         *
+         * This is an additional safety measure.
+         */
+
+        if (reaction.key?.fromMe) {
+            return;
+        }
+
+
+        /*
+         * IMPORTANT:
+         *
+         * reactionUpdate.key is the KEY OF THE MESSAGE
+         * THAT RECEIVED THE REACTION.
+         *
+         * This is exactly what we need.
+         */
+
+        console.log(
+            `[OnceDL] Reaction detected: ${reaction.text}`
+        );
+
+        console.log(
+            `[OnceDL] Target: ${targetKey.remoteJid}:${targetKey.id}`
+        );
+
+
+        /*
+         * --------------------------------------------------------
+         * FIND ORIGINAL MESSAGE
+         * --------------------------------------------------------
+         */
+
+        const originalMessage =
+            await findOriginalMessage(
+                socket,
+                targetKey
+            );
+
+        if (!originalMessage) {
+            console.log(
+                '[OnceDL] Reaction target was not found in cache/store.'
+            );
+
+            return;
+        }
+
+
+        /*
+         * --------------------------------------------------------
+         * CHECK VIEW ONCE
+         * --------------------------------------------------------
+         */
+
+        const mediaInfo =
+            getViewOnceMedia(
+                originalMessage.message
+            );
+
+        if (!mediaInfo) {
+            return;
+        }
+
+
+        /*
+         * --------------------------------------------------------
+         * DOWNLOAD
+         * --------------------------------------------------------
+         */
+
+        await processViewOnce({
+            socket,
+
+            /*
+             * Reaction event itself is not a normal WAMessage.
+             * We therefore do not pass it as a trigger message.
+             */
+
+            triggerMessage: null,
+
+            targetMessage:
+                originalMessage.message,
+
+            targetKey
+        });
 
     } catch (error) {
         console.error(
-            '[OnceDL] Downloaded cache cleanup error:',
+            '[OnceDL] Reaction handler error:',
             error?.message || error
         );
     }
@@ -743,7 +1116,7 @@ function cleanDownloadedCache() {
 
 /*
  * ============================================================
- * INITIALIZE
+ * INITIALIZE PLUGIN
  * ============================================================
  */
 
@@ -753,22 +1126,29 @@ function initOnceDL(socket) {
     }
 
     const sessionJid =
-        jidNormalizedUser(socket.user.id);
+        jidNormalizedUser(
+            socket.user.id
+        );
 
     const socketId =
         sessionJid.split('@')[0];
 
 
     /*
-     * Éviter les listeners dupliqués.
+     * Prevent duplicate listeners.
      */
 
-    const active =
-        global.onceDlListeners.get(socketId);
+    const existing =
+        global.onceDlListeners.get(
+            socketId
+        );
 
-    if (active && active.socket === socket) {
+    if (
+        existing &&
+        existing.socket === socket
+    ) {
         console.log(
-            `[OnceDL] Listener already active for ${socketId}`
+            `[OnceDL] Already active for ${socketId}`
         );
 
         return;
@@ -777,265 +1157,240 @@ function initOnceDL(socket) {
 
     /*
      * ========================================================
-     * MAIN LISTENER
+     * MESSAGE LISTENER
+     * ========================================================
+     *
+     * Used mainly for:
+     *
+     * - caching ViewOnce messages
+     * - detecting replies
      * ========================================================
      */
 
-    const onceListener = async (chatUpdate) => {
-        try {
-            const messages =
-                chatUpdate?.messages || [];
+    const upsertListener =
+        async (chatUpdate) => {
+            try {
+                const messages =
+                    chatUpdate?.messages || [];
 
-            if (!messages.length) {
-                return;
-            }
-
-            /*
-             * Traiter tous les messages reçus.
-             */
-
-            for (const msg of messages) {
-                if (!msg?.message) {
-                    continue;
+                if (!messages.length) {
+                    return;
                 }
 
 
-                /*
-                 * ------------------------------------------------
-                 * 1. METTRE LE MESSAGE DANS LE CACHE
-                 * ------------------------------------------------
-                 *
-                 * Très important pour les reactions :
-                 * une reaction ne contient généralement pas
-                 * le contenu du message original.
-                 */
-
-                cacheMessage(msg);
-
-
-                /*
-                 * ------------------------------------------------
-                 * 2. SI C'EST DIRECTEMENT UN VIEW ONCE
-                 * ------------------------------------------------
-                 *
-                 * On le met simplement dans le cache.
-                 * On ne le télécharge pas automatiquement.
-                 */
-
-                const directViewOnce =
-                    getViewOnceMedia(msg.message);
-
-                if (directViewOnce) {
-                    continue;
-                }
-
-
-                /*
-                 * ------------------------------------------------
-                 * 3. REACTION SUR UN VIEW ONCE
-                 * ------------------------------------------------
-                 */
-
-                if (isReactionMessage(msg)) {
-                    const targetKey =
-                        getReactionTargetKey(msg);
-
-                    if (!targetKey) {
+                for (
+                    const msg of messages
+                ) {
+                    if (!msg?.message) {
                         continue;
                     }
 
+
                     /*
-                     * Trouver le message original.
+                     * ALWAYS cache messages first.
+                     *
+                     * This is crucial for reaction support.
                      */
 
-                    const originalMessage =
-                        findOriginalMessage(
-                            socket,
-                            targetKey
-                        );
+                    cacheMessage(msg);
 
-                    if (!originalMessage) {
-                        console.log(
-                            '[OnceDL] Reaction detected, but original message is not available in cache/store.'
-                        );
 
+                    /*
+                     * Clean cache periodically.
+                     */
+
+                    cleanMessageCache();
+
+
+                    /*
+                     * Reply detection.
+                     *
+                     * We do NOT require text.
+                     * We do NOT require emoji.
+                     * We do NOT require 3 characters.
+                     */
+
+                    const quotedInfo =
+                        getQuotedInfo(msg);
+
+                    if (!quotedInfo) {
                         continue;
                     }
 
-                    /*
-                     * Vérifier que le message ciblé est ViewOnce.
-                     */
 
                     const mediaInfo =
                         getViewOnceMedia(
-                            originalMessage.message
+                            quotedInfo.quotedMessage
                         );
 
                     if (!mediaInfo) {
                         continue;
                     }
 
-                    /*
-                     * Télécharger.
-                     */
 
                     await processViewOnce({
                         socket,
-                        triggerMessage: msg,
-                        targetMessage: originalMessage.message,
-                        targetKey
+
+                        triggerMessage:
+                            msg,
+
+                        targetMessage:
+                            quotedInfo.quotedMessage,
+
+                        targetKey:
+                            quotedInfo.targetKey
                     });
-
-                    continue;
                 }
 
-
-                /*
-                 * ------------------------------------------------
-                 * 4. REPLY SUR UN VIEW ONCE
-                 * ------------------------------------------------
-                 */
-
-                const quotedMessage =
-                    getQuotedMessage(msg);
-
-                if (!quotedMessage) {
-                    continue;
-                }
-
-                /*
-                 * Vérifier directement le quoted message.
-                 */
-
-                const mediaInfo =
-                    getViewOnceMedia(
-                        quotedMessage
-                    );
-
-                if (!mediaInfo) {
-                    continue;
-                }
-
-                /*
-                 * Le quotedMessage n'a pas toujours sa propre
-                 * key complète dans ce contexte.
-                 *
-                 * On utilise donc la clé fournie par
-                 * contextInfo.quotedMessage.
-                 */
-
-                const messageType =
-                    getContentType(msg.message);
-
-                const messageContent =
-                    msg.message?.[messageType];
-
-                const contextInfo =
-                    messageContent?.contextInfo;
-
-                const quotedKey =
-                    contextInfo?.stanzaId
-                        ? {
-                            remoteJid:
-                                msg.key.remoteJid,
-                            id:
-                                contextInfo.stanzaId,
-                            participant:
-                                contextInfo.participant
-                          }
-                        : null;
-
-
-                await processViewOnce({
-                    socket,
-                    triggerMessage: msg,
-                    targetMessage: quotedMessage,
-                    targetKey: quotedKey
-                });
+            } catch (error) {
+                console.error(
+                    '[OnceDL] messages.upsert error:',
+                    error?.message || error
+                );
             }
-
-        } catch (error) {
-            console.error(
-                '[OnceDL] Listener error:',
-                error?.message || error
-            );
-        }
-    };
+        };
 
 
     /*
      * ========================================================
-     * REGISTER LISTENER
+     * REACTION LISTENER
+     * ========================================================
+     *
+     * THIS WAS THE IMPORTANT MISSING PART.
+     *
+     * Baileys has a dedicated messages.reaction event.
+     * ========================================================
+     */
+
+    const reactionListener =
+        async (reactionUpdates) => {
+            try {
+                if (
+                    !Array.isArray(
+                        reactionUpdates
+                    )
+                ) {
+                    return;
+                }
+
+
+                for (
+                    const reactionUpdate
+                    of reactionUpdates
+                ) {
+                    await handleReaction(
+                        socket,
+                        reactionUpdate
+                    );
+                }
+
+            } catch (error) {
+                console.error(
+                    '[OnceDL] messages.reaction error:',
+                    error?.message || error
+                );
+            }
+        };
+
+
+    /*
+     * ========================================================
+     * REGISTER EVENTS
      * ========================================================
      */
 
     socket.ev.on(
         'messages.upsert',
-        onceListener
+        upsertListener
     );
 
+    socket.ev.on(
+        'messages.reaction',
+        reactionListener
+    );
+
+
+    /*
+     * ========================================================
+     * SAVE LISTENERS
+     * ========================================================
+     */
 
     global.onceDlListeners.set(
         socketId,
         {
             socket,
-            listener: onceListener
+
+            upsertListener,
+
+            reactionListener
         }
     );
 
 
     /*
      * ========================================================
-     * CLEANUP INTERVAL
+     * CLEANUP TIMER
      * ========================================================
      */
 
-    const cleanupInterval =
+    const cleanupTimer =
         setInterval(() => {
             cleanMessageCache();
             cleanDownloadedCache();
         }, 5 * 60 * 1000);
 
-
-    /*
-     * Éviter que le timer empêche Node.js de se fermer.
-     */
-
-    if (cleanupInterval.unref) {
-        cleanupInterval.unref();
+    if (
+        cleanupTimer.unref
+    ) {
+        cleanupTimer.unref();
     }
 
+
+    /*
+     * ========================================================
+     * LOG
+     * ========================================================
+     */
 
     console.log(
         `👁️ ViewOnce Downloader AUTO-ACTIVATED for ${socketId}`
     );
 
     console.log(
-        `↳ Reply: ENABLED`
+        '↳ Reply trigger: ENABLED'
     );
 
     console.log(
-        `↳ Reaction: ENABLED`
+        '↳ Reaction trigger: ENABLED'
     );
 
     console.log(
-        `↳ Image: ENABLED`
+        '↳ Any emoji: ENABLED'
     );
 
     console.log(
-        `↳ Video: ENABLED`
+        '↳ Image ViewOnce: ENABLED'
     );
 
     console.log(
-        `↳ Audio: ENABLED`
+        '↳ Video ViewOnce: ENABLED'
     );
 
     console.log(
-        `↳ Anti-Duplicate: ENABLED`
+        '↳ Audio ViewOnce: ENABLED'
     );
 
     console.log(
-        `↳ Retry: ${DOWNLOAD_RETRIES} attempts`
+        '↳ Anti-duplicate: ENABLED'
+    );
+
+    console.log(
+        `↳ Download retries: ${DOWNLOAD_RETRIES}`
+    );
+
+    console.log(
+        '↳ Automatic reactions: DISABLED'
     );
 }
 
@@ -1052,7 +1407,7 @@ module.exports = {
     category: 'utility',
 
     description:
-        'Automatically downloads ViewOnce image, video and audio when a user replies or reacts to it.',
+        'Automatically downloads ViewOnce image, video and audio through replies or reactions.',
 
     commands: [
         'oncedl'
@@ -1063,9 +1418,10 @@ module.exports = {
     handler: async ({ reply }) => {
         await reply(
             '✅ *ViewOnce Downloader is Active!*\n\n' +
-            '↳ Reply to any ViewOnce to download it.\n' +
-            '↳ React to any ViewOnce with any emoji to download it.\n' +
-            '↳ No specific emoji required.'
+            '↳ Reply to a ViewOnce to download it.\n' +
+            '↳ React to a ViewOnce with any emoji to download it.\n' +
+            '↳ No specific emoji is required.\n' +
+            '↳ Automatic download reactions are disabled.'
         );
     }
 };
